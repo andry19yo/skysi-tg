@@ -35,7 +35,7 @@ export default function Finance() {
       try {
         const { data, error: err } = await supabase
           .from('financial_accounts')
-          .select('id, name, balance, currency, type, bank_name')
+          .select('id, name, balance, acc_type, accounting_type')
           .order('balance', { ascending: false })
 
         if (err) throw err
@@ -57,17 +57,18 @@ export default function Finance() {
   const total = accounts.reduce((s, a) => s + (a.balance || 0), 0)
 
   const grouped = accounts.reduce((acc, a) => {
-    const key = a.type || 'other'
+    const key = a.acc_type || 'other'
     if (!acc[key]) acc[key] = []
     acc[key].push(a)
     return acc
   }, {})
 
   const TYPE_LABELS = {
-    cash:    'Наличные',
-    bank:    'Банковские счета',
-    credit:  'Кредиты',
-    other:   'Прочее',
+    checking: 'Расчётные счета',
+    cash:     'Наличные',
+    savings:  'Сберегательные',
+    credit:   'Кредиты',
+    other:    'Прочее',
   }
 
   return (
@@ -92,8 +93,8 @@ export default function Finance() {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div>
                   <div style={{ fontSize: 14, fontWeight: 500 }}>{a.name}</div>
-                  {a.bank_name && (
-                    <div style={{ fontSize: 11, color: '#888', marginTop: 2 }}>{a.bank_name}</div>
+                  {a.accounting_type && (
+                    <div style={{ fontSize: 11, color: '#888', marginTop: 2 }}>{a.accounting_type}</div>
                   )}
                 </div>
                 <div style={{
@@ -101,7 +102,7 @@ export default function Finance() {
                   fontWeight: 600,
                   color: (a.balance || 0) >= 0 ? (tg?.themeParams?.text_color || '#fff') : '#f44336',
                 }}>
-                  {fmt(a.balance)} {a.currency || '₽'}
+                  {fmt(a.balance)} ₽
                 </div>
               </div>
             </Card>

@@ -56,13 +56,12 @@ export default function Orders() {
       try {
         let query = supabase
           .from('documents')
-          .select('id, number, date, status, platform, total_amount, counterparty')
-          .in('type', ['order', 'sale'])
-          .order('date', { ascending: false })
+          .select('id, doc_type, num, doc_date, status, source, amount, contractor_name')
+          .order('created_at', { ascending: false })
           .limit(50)
 
         if (filter !== 'all') {
-          query = query.eq('platform', filter)
+          query = query.eq('source', filter)
         }
 
         const { data, error: err } = await query
@@ -121,22 +120,22 @@ export default function Orders() {
             <Card key={o.id}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
                 <div>
-                  <span style={{ fontSize: 13, fontWeight: 600 }}>№{o.number || o.id}</span>
-                  <span style={{ fontSize: 11, color: '#888', marginLeft: 8 }}>{fmtDate(o.date)}</span>
+                  <span style={{ fontSize: 13, fontWeight: 600 }}>№{o.num || o.id}</span>
+                  <span style={{ fontSize: 11, color: '#888', marginLeft: 8 }}>{fmtDate(o.doc_date)}</span>
                 </div>
                 <Badge color={statusColor(o.status)}>{o.status || '—'}</Badge>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div>
-                  {o.platform && (
-                    <Badge color={platformColor(o.platform)}>{o.platform}</Badge>
+                  {o.source && (
+                    <Badge color={platformColor(o.source)}>{o.source}</Badge>
                   )}
-                  {o.counterparty && (
-                    <span style={{ fontSize: 12, color: '#888', marginLeft: 8 }}>{o.counterparty}</span>
+                  {o.contractor_name && (
+                    <span style={{ fontSize: 12, color: '#888', marginLeft: 8 }}>{o.contractor_name}</span>
                   )}
                 </div>
                 <span style={{ fontSize: 14, fontWeight: 600 }}>
-                  {fmt(o.total_amount)} ₽
+                  {fmt(o.amount)} ₽
                 </span>
               </div>
             </Card>

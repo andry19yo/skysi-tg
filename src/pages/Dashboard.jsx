@@ -20,25 +20,27 @@ export default function Dashboard() {
       setLoading(true)
       setError(null)
       try {
-        // Остатки склада в красной зоне (quantity <= min_quantity)
+        // Остатки склада в красной зоне (qty < 20)
         const { data: stockData, error: stockErr } = await supabase
-          .from('stock_items')
-          .select('id, name, quantity, min_quantity, unit')
-          .lte('quantity', supabase.raw('min_quantity'))
-          .order('quantity', { ascending: true })
+          .from('products')
+          .select('id, name, qty, min_qty, unit, product_groups(name)')
+          .lt('qty', 20)
+          .order('qty', { ascending: true })
           .limit(20)
 
         if (stockErr) throw stockErr
 
+        const redZone = stockData || []
+
         // Баланс счетов
         const { data: accData, error: accErr } = await supabase
           .from('financial_accounts')
-          .select('id, name, balance, currency')
+          .select('id, name, balance, acc_type')
           .order('balance', { ascending: false })
 
         if (accErr) throw accErr
 
-        setStock(stockData || [])
+        setStock(redZone)
         setAccounts(accData || [])
       } catch (e) {
         setError(e.message)
@@ -72,7 +74,7 @@ export default function Dashboard() {
             paddingTop: 8,
           }}>
             <span style={{ color: tg?.themeParams?.hint_color || '#aaa' }}>{a.name}</span>
-            <span>{fmt(a.balance)} {a.currency || '₽'}</span>
+            <span>{fmt(a.balance)} ₽</span>
           </div>
         ))}
       </Card>
@@ -91,11 +93,11 @@ export default function Dashboard() {
                   {item.name}
                 </div>
                 <div style={{ fontSize: 12, color: tg?.themeParams?.hint_color || '#888' }}>
-                  мин: {fmt(item.min_quantity)} {item.unit}
+                  {item.product_groups?.name || ''}{item.min_qty > 0 ? ` · мин: ${fmt(item.min_qty)}` : ''}
                 </div>
               </div>
               <Badge color="#f44336">
-                {fmt(item.quantity)} {item.unit}
+                {fmt(item.qty)} {item.unit || ''}
               </Badge>
             </div>
           </Card>

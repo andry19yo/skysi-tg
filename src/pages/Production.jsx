@@ -55,9 +55,9 @@ export default function Production() {
       try {
         const { data, error: err } = await supabase
           .from('production_orders')
-          .select('id, number, product_name, status, planned_qty, produced_qty, start_date, end_date, responsible')
-          .in('status', ['planned', 'in_progress', 'paused'])
-          .order('start_date', { ascending: true })
+          .select('id, order_num, product_name, qty, status, started_date, deadline, responsible')
+          .in('status', ['new', 'in_progress', 'paused'])
+          .order('started_date', { ascending: true })
           .limit(30)
 
         if (err) throw err
@@ -75,7 +75,7 @@ export default function Production() {
   if (error) return <ErrorMsg msg={error} />
 
   const inProgress = batches.filter(b => b.status === 'in_progress')
-  const planned    = batches.filter(b => b.status === 'planned')
+  const planned    = batches.filter(b => b.status === 'new')
   const paused     = batches.filter(b => b.status === 'paused')
 
   const groups = [
@@ -98,19 +98,16 @@ export default function Production() {
                 <div>
                   <div style={{ fontSize: 14, fontWeight: 600 }}>{b.product_name || 'Без названия'}</div>
                   <div style={{ fontSize: 11, color: '#888', marginTop: 2 }}>
-                    №{b.number} · {fmtDate(b.start_date)} — {fmtDate(b.end_date)}
+                    №{b.order_num} · {fmtDate(b.started_date)}{b.deadline ? ` — ${fmtDate(b.deadline)}` : ''}
                   </div>
                 </div>
                 <Badge color={STATUS_COLORS[b.status] || '#888'}>
                   {b.status}
                 </Badge>
               </div>
-              {b.responsible && (
-                <div style={{ fontSize: 12, color: '#888', marginBottom: 4 }}>
-                  {b.responsible}
-                </div>
-              )}
-              <Progress value={b.produced_qty || 0} max={b.planned_qty || 0} />
+              <div style={{ fontSize: 12, color: '#888', marginTop: 4 }}>
+                {fmt(b.qty)} шт{b.responsible ? ` · ${b.responsible}` : ''}
+              </div>
             </Card>
           ))}
         </div>
