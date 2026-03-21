@@ -42,7 +42,7 @@ export default function Documents() {
     try {
       let query = supabase
         .from('documents')
-        .select('id, doc_num, doc_type, doc_date, total_amount, status, accounting_type, contractor_id, contractors(name)')
+        .select('id, num, doc_type, doc_date, total_amount, status, accounting_type, contractor_id, contractors(name)')
         .order('doc_date', { ascending: false })
         .limit(50)
 
@@ -135,7 +135,7 @@ export default function Documents() {
               <span style={{ fontSize: 11, color: colors.hint, whiteSpace: 'nowrap' }}>{fmtDate(d.doc_date)}</span>
             </div>
             <div style={{ fontSize: 13, marginTop: 4 }}>
-              <span style={{ fontWeight: 500 }}>#{d.doc_num}</span>
+              <span style={{ fontWeight: 500 }}>#{d.num}</span>
               <span style={{ color: colors.hint, marginLeft: 8, fontSize: 12 }}>{d.contractors?.name || ''}</span>
             </div>
             <div style={{ fontSize: 14, fontWeight: 600, marginTop: 4 }}>

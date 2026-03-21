@@ -43,7 +43,7 @@ export default function DocDetail({ docId, onBack, onNavigate }) {
         if (docData.base_document_id) {
           const { data: base } = await supabase
             .from('documents')
-            .select('id, doc_num, doc_type')
+            .select('id, num, doc_type')
             .eq('id', docData.base_document_id)
             .single()
           if (!cancelled) setBaseDoc(base)
@@ -54,7 +54,7 @@ export default function DocDetail({ docId, onBack, onNavigate }) {
         // Child documents
         const { data: children } = await supabase
           .from('documents')
-          .select('id, doc_num, doc_type, status')
+          .select('id, num, doc_type, status')
           .eq('base_document_id', docId)
           .order('doc_date')
 
@@ -112,7 +112,7 @@ export default function DocDetail({ docId, onBack, onNavigate }) {
           )}
         </div>
         <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>
-          #{doc.doc_num}
+          #{doc.num}
         </div>
         <div style={{ fontSize: 12, color: colors.hint, marginBottom: 4 }}>
           {fmtDate(doc.doc_date)}
@@ -134,7 +134,7 @@ export default function DocDetail({ docId, onBack, onNavigate }) {
               <Badge color={DOC_TYPE_COLORS[baseDoc.doc_type] || '#888'}>
                 {DOC_TYPE_MAP[baseDoc.doc_type] || baseDoc.doc_type}
               </Badge>
-              <span style={{ fontSize: 13, color: colors.button }}>#{baseDoc.doc_num}</span>
+              <span style={{ fontSize: 13, color: colors.button }}>#{baseDoc.num}</span>
             </div>
           </Card>
         </>
@@ -150,7 +150,7 @@ export default function DocDetail({ docId, onBack, onNavigate }) {
                 <Badge color={DOC_TYPE_COLORS[cd.doc_type] || '#888'}>
                   {DOC_TYPE_MAP[cd.doc_type] || cd.doc_type}
                 </Badge>
-                <span style={{ fontSize: 13, color: colors.button }}>#{cd.doc_num}</span>
+                <span style={{ fontSize: 13, color: colors.button }}>#{cd.num}</span>
                 <Badge color={STATUS_COLORS[cd.status] || '#888'}>
                   {DOC_STATUS_MAP[cd.status] || cd.status}
                 </Badge>
