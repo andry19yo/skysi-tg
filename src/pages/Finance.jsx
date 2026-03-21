@@ -1,117 +1,126 @@
-import React, { useEffect, useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { supabase } from '../supabase.js'
-import { Card, SectionTitle, Badge, Spinner, ErrorMsg } from '../components/Card.jsx'
-
-const tg = window.Telegram?.WebApp
-
-function fmt(n) {
-  if (n == null) return '—'
-  const abs = Math.abs(Number(n))
-  const s = abs.toLocaleString('ru-RU')
-  return (n < 0 ? '−' : '') + s
-}
-
-function BalanceBar({ positive, negative }) {
-  const total = positive + Math.abs(negative)
-  if (!total) return null
-  const posPct = (positive / total) * 100
-  return (
-    <div style={{ display: 'flex', height: 6, borderRadius: 3, overflow: 'hidden', marginTop: 8 }}>
-      <div style={{ width: posPct + '%', background: '#4caf50' }} />
-      <div style={{ width: (100 - posPct) + '%', background: '#f44336' }} />
-    </div>
-  )
-}
+import { fmt, fmtDateTime, ACCOUNTING_MAP, colors } from '../utils'
+import { Card, SectionTitle, Spinner, ErrorMsg, EmptyState, FilterChips } from '../components/Card.jsx'
+import { Badge } from '../components/Badge.jsx'
 
 export default function Finance() {
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
   const [accounts, setAccounts] = useState([])
-  const [loading, setLoading]   = useState(true)
-  const [error, setError]       = useState(null)
+  const [transactions, setTransactions] = useState([])
+  const [filterAccount, setFilterAccount] = useState('all')
+  const [filterType, setFilterType] = useState('all')
 
-  useEffect(() => {
-    async function load() {
-      setLoading(true)
-      setError(null)
-      try {
-        const { data, error: err } = await supabase
-          .from('financial_accounts')
-          .select('id, name, balance, acc_type, accounting_type')
-          .order('balance', { ascending: false })
+  const load = async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const { data: acc, error: e1 } = await supabase
+        .from('financial_accounts')
+        .select('*')
+        .order('name')
 
-        if (err) throw err
-        setAccounts(data || [])
-      } catch (e) {
-        setError(e.message)
-      } finally {
-        setLoading(false)
-      }
+      if (e1) throw e1
+      setAccounts(acc || [])
+
+      const { data: txn, error: e2 } = await supabase
+        .from('transactions')
+        .select('*, financial_accounts(name)')
+        .order('created_at', { ascending: false })
+        .limit(20)
+
+      if (e2) throw e2
+      setTransactions(txn || [])
+    } catch (e) {
+      setError(e.message)
     }
-    load()
-  }, [])
+    setLoading(false)
+  }
+
+  useEffect(() => { load() }, [])
 
   if (loading) return <Spinner />
   if (error) return <ErrorMsg msg={error} />
 
-  const totalPositive = accounts.filter(a => (a.balance || 0) > 0).reduce((s, a) => s + a.balance, 0)
-  const totalNegative = accounts.filter(a => (a.balance || 0) < 0).reduce((s, a) => s + a.balance, 0)
-  const total = accounts.reduce((s, a) => s + (a.balance || 0), 0)
+  const accountOptions = [
+    { value: 'all', label: 'Все счета' },
+    ...accounts.map(a => ({ value: String(a.id), label: a.name })),
+  ]
 
-  const grouped = accounts.reduce((acc, a) => {
-    const key = a.acc_type || 'other'
-    if (!acc[key]) acc[key] = []
-    acc[key].push(a)
-    return acc
-  }, {})
+  const typeOptions = [
+    { value: 'all', label: 'Все' },
+    { value: 'income', label: 'Приход' },
+    { value: 'expense', label: 'Расход' },
+  ]
 
-  const TYPE_LABELS = {
-    checking: 'Расчётные счета',
-    cash:     'Наличные',
-    savings:  'Сберегательные',
-    credit:   'Кредиты',
-    other:    'Прочее',
+  let filteredTxn = transactions
+  if (filterAccount !== 'all') {
+    filteredTxn = filteredTxn.filter(t => String(t.account_id) === filterAccount)
+  }
+  if (filterType === 'income') {
+    filteredTxn = filteredTxn.filter(t => Number(t.amount) > 0)
+  } else if (filterType === 'expense') {
+    filteredTxn = filteredTxn.filter(t => Number(t.amount) < 0)
   }
 
   return (
     <div>
-      <SectionTitle>Общий баланс</SectionTitle>
-      <Card>
-        <div style={{ fontSize: 26, fontWeight: 600, marginBottom: 4, color: total >= 0 ? '#4caf50' : '#f44336' }}>
-          {fmt(total)} ₽
-        </div>
-        <div style={{ display: 'flex', gap: 16, fontSize: 12, marginTop: 8 }}>
-          <span style={{ color: '#4caf50' }}>+{fmt(totalPositive)}</span>
-          <span style={{ color: '#f44336' }}>−{fmt(Math.abs(totalNegative))}</span>
-        </div>
-        <BalanceBar positive={totalPositive} negative={totalNegative} />
-      </Card>
+      <SectionTitle>Счета</SectionTitle>
+      {accounts.map(a => (
+        <Card key={a.id}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 500 }}>{a.name}</div>
+              <Badge color={a.accounting_type === 'official' ? '#4caf50' : '#ff9800'} style={{ marginTop: 4 }}>
+                {ACCOUNTING_MAP[a.accounting_type] || a.accounting_type || '—'}
+              </Badge>
+            </div>
+            <div style={{
+              fontSize: 16,
+              fontWeight: 600,
+              color: Number(a.balance) >= 0 ? '#4caf50' : '#f44336',
+            }}>
+              {fmt(a.balance)} ₽
+            </div>
+          </div>
+        </Card>
+      ))}
 
-      {Object.entries(grouped).map(([type, items]) => (
-        <div key={type}>
-          <SectionTitle>{TYPE_LABELS[type] || type}</SectionTitle>
-          {items.map(a => (
-            <Card key={a.id}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
-                  <div style={{ fontSize: 14, fontWeight: 500 }}>{a.name}</div>
-                  {a.accounting_type && (
-                    <div style={{ fontSize: 11, color: '#888', marginTop: 2 }}>{a.accounting_type}</div>
-                  )}
+      <SectionTitle>Транзакции</SectionTitle>
+      <FilterChips options={typeOptions} value={filterType} onChange={setFilterType} />
+      {accounts.length > 2 && (
+        <FilterChips options={accountOptions} value={filterAccount} onChange={setFilterAccount} />
+      )}
+
+      {filteredTxn.length === 0 ? (
+        <EmptyState text="Нет транзакций" />
+      ) : (
+        filteredTxn.map(t => {
+          const amt = Number(t.amount || 0)
+          const isIncome = amt > 0
+          return (
+            <Card key={t.id}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 12 }}>{t.description || t.financial_accounts?.name || '—'}</div>
+                  <div style={{ fontSize: 11, color: colors.hint, marginTop: 2 }}>
+                    {t.financial_accounts?.name} &middot; {fmtDateTime(t.created_at)}
+                  </div>
                 </div>
                 <div style={{
-                  fontSize: 15,
+                  fontSize: 14,
                   fontWeight: 600,
-                  color: (a.balance || 0) >= 0 ? (tg?.themeParams?.text_color || '#fff') : '#f44336',
+                  color: isIncome ? '#4caf50' : '#f44336',
+                  whiteSpace: 'nowrap',
+                  marginLeft: 8,
                 }}>
-                  {fmt(a.balance)} ₽
+                  {isIncome ? '+' : ''}{fmt(amt)} ₽
                 </div>
               </div>
             </Card>
-          ))}
-        </div>
-      ))}
-
-      {accounts.length === 0 && (
-        <Card><span style={{ color: '#888', fontSize: 13 }}>Счета не найдены</span></Card>
+          )
+        })
       )}
     </div>
   )

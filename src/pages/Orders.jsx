@@ -1,146 +1,122 @@
-import React, { useEffect, useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { supabase } from '../supabase.js'
-import { Card, SectionTitle, Badge, Spinner, ErrorMsg } from '../components/Card.jsx'
-
-const tg = window.Telegram?.WebApp
+import { fmtDate, fmt, colors } from '../utils'
+import { Card, SectionTitle, Spinner, ErrorMsg, EmptyState, SearchInput, FilterChips } from '../components/Card.jsx'
+import { Badge } from '../components/Badge.jsx'
 
 const STATUS_COLORS = {
-  new:        '#2196f3',
-  confirmed:  '#9c27b0',
+  new: '#2196f3',
+  confirmed: '#4caf50',
   processing: '#ff9800',
-  shipped:    '#03a9f4',
-  delivered:  '#4caf50',
-  cancelled:  '#f44336',
-  default:    '#888888',
+  shipped: '#9c27b0',
+  delivered: '#4caf50',
+  cancelled: '#f44336',
 }
 
-const PLATFORM_COLORS = {
-  WB:   '#9c27b0',
-  Ozon: '#2196f3',
-  default: '#888',
-}
-
-function statusColor(s) {
-  return STATUS_COLORS[s] || STATUS_COLORS.default
-}
-
-function platformColor(p) {
-  if (!p) return PLATFORM_COLORS.default
-  if (p.toLowerCase().includes('wb') || p.toLowerCase().includes('wildberries'))
-    return PLATFORM_COLORS.WB
-  if (p.toLowerCase().includes('ozon'))
-    return PLATFORM_COLORS.Ozon
-  return PLATFORM_COLORS.default
-}
-
-function fmt(n) {
-  if (n == null) return '—'
-  return Number(n).toLocaleString('ru-RU')
-}
-
-function fmtDate(d) {
-  if (!d) return ''
-  return new Date(d).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' })
+const STATUS_LABELS = {
+  new: 'Новый',
+  confirmed: 'Подтверждён',
+  processing: 'В обработке',
+  shipped: 'Отправлен',
+  delivered: 'Доставлен',
+  cancelled: 'Отменён',
 }
 
 export default function Orders() {
-  const [orders, setOrders] = useState([])
   const [loading, setLoading] = useState(true)
-  const [error, setError]     = useState(null)
-  const [filter, setFilter]   = useState('all')
+  const [error, setError] = useState(null)
+  const [orders, setOrders] = useState([])
+  const [search, setSearch] = useState('')
+  const [platform, setPlatform] = useState('all')
 
-  useEffect(() => {
-    async function load() {
-      setLoading(true)
-      setError(null)
-      try {
-        let query = supabase
-          .from('documents')
-          .select('id, doc_type, num, doc_date, status, source, amount, contractor_name')
-          .order('created_at', { ascending: false })
-          .limit(50)
+  const load = async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const { data, error: err } = await supabase
+        .from('orders')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(50)
 
-        if (filter !== 'all') {
-          query = query.eq('source', filter)
-        }
-
-        const { data, error: err } = await query
-        if (err) throw err
-        setOrders(data || [])
-      } catch (e) {
-        setError(e.message)
-      } finally {
-        setLoading(false)
-      }
+      if (err) throw err
+      setOrders(data || [])
+    } catch (e) {
+      setError(e.message)
     }
-    load()
-  }, [filter])
+    setLoading(false)
+  }
 
-  const filters = [
-    { id: 'all', label: 'Все' },
-    { id: 'WB',   label: 'WB' },
-    { id: 'Ozon', label: 'Ozon' },
+  useEffect(() => { load() }, [])
+
+  if (loading) return <Spinner />
+  if (error) return <ErrorMsg msg={error} />
+
+  const platformOptions = [
+    { value: 'all', label: 'Все' },
+    { value: 'wb', label: 'Wildberries' },
+    { value: 'ozon', label: 'Ozon' },
   ]
+
+  let filtered = orders
+  if (search) {
+    const q = search.toLowerCase()
+    filtered = filtered.filter(o =>
+      (o.order_number || '').toLowerCase().includes(q) ||
+      (o.external_id || '').toLowerCase().includes(q)
+    )
+  }
+  if (platform !== 'all') {
+    filtered = filtered.filter(o => (o.platform || o.source || '').toLowerCase() === platform)
+  }
+
+  if (orders.length === 0) {
+    return (
+      <div>
+        <SectionTitle>Заказы маркетплейсов</SectionTitle>
+        <EmptyState text="Нет заказов" />
+      </div>
+    )
+  }
 
   return (
     <div>
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-        {filters.map(f => (
-          <button
-            key={f.id}
-            onClick={() => setFilter(f.id)}
-            style={{
-              padding: '6px 14px',
-              borderRadius: 6,
-              border: 'none',
-              cursor: 'pointer',
-              fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 12,
-              fontWeight: 500,
-              background: filter === f.id
-                ? (tg?.themeParams?.button_color || '#2196f3')
-                : 'rgba(255,255,255,0.08)',
-              color: filter === f.id
-                ? (tg?.themeParams?.button_text_color || '#fff')
-                : (tg?.themeParams?.text_color || '#fff'),
-            }}
-          >
-            {f.label}
-          </button>
-        ))}
-      </div>
+      <SectionTitle>Заказы МП ({filtered.length})</SectionTitle>
+      <SearchInput value={search} onChange={setSearch} placeholder="Поиск по номеру..." />
+      <FilterChips options={platformOptions} value={platform} onChange={setPlatform} />
 
-      {loading ? <Spinner /> : error ? <ErrorMsg msg={error} /> : (
-        <>
-          <SectionTitle>{orders.length} заказов</SectionTitle>
-          {orders.length === 0 && (
-            <Card><span style={{ color: '#888', fontSize: 13 }}>Заказы не найдены</span></Card>
-          )}
-          {orders.map(o => (
+      {filtered.length === 0 ? (
+        <EmptyState text="Заказы не найдены" />
+      ) : (
+        filtered.map(o => {
+          const status = o.status || 'new'
+          const src = (o.platform || o.source || '').toUpperCase()
+          return (
             <Card key={o.id}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
-                <div>
-                  <span style={{ fontSize: 13, fontWeight: 600 }}>№{o.num || o.id}</span>
-                  <span style={{ fontSize: 11, color: '#888', marginLeft: 8 }}>{fmtDate(o.doc_date)}</span>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
+                <div style={{ fontSize: 13, fontWeight: 500 }}>
+                  #{o.order_number || o.external_id || o.id}
                 </div>
-                <Badge color={statusColor(o.status)}>{o.status || '—'}</Badge>
+                <span style={{ fontSize: 11, color: colors.hint }}>{fmtDate(o.created_at)}</span>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
-                  {o.source && (
-                    <Badge color={platformColor(o.source)}>{o.source}</Badge>
-                  )}
-                  {o.contractor_name && (
-                    <span style={{ fontSize: 12, color: '#888', marginLeft: 8 }}>{o.contractor_name}</span>
-                  )}
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 4 }}>
+                {src && (
+                  <Badge color={src === 'WB' ? '#cb11ab' : src === 'OZON' ? '#005bff' : '#888'}>
+                    {src}
+                  </Badge>
+                )}
+                <Badge color={STATUS_COLORS[status] || '#888'}>
+                  {STATUS_LABELS[status] || status}
+                </Badge>
+              </div>
+              {o.total_amount != null && (
+                <div style={{ fontSize: 14, fontWeight: 600, marginTop: 4 }}>
+                  {fmt(o.total_amount)} ₽
                 </div>
-                <span style={{ fontSize: 14, fontWeight: 600 }}>
-                  {fmt(o.amount)} ₽
-                </span>
-              </div>
+              )}
             </Card>
-          ))}
-        </>
+          )
+        })
       )}
     </div>
   )
