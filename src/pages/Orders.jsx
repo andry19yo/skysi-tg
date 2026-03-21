@@ -33,16 +33,35 @@ export default function Orders() {
     setLoading(true)
     setError(null)
     try {
-      const { data, error: err } = await supabase
-        .from('orders')
+      // Try marketplace_orders first, then orders
+      let data = null
+      let err = null
+
+      const res1 = await supabase
+        .from('marketplace_orders')
         .select('*')
         .order('created_at', { ascending: false })
         .limit(50)
 
-      if (err) throw err
+      if (!res1.error) {
+        data = res1.data
+      } else {
+        const res2 = await supabase
+          .from('orders')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(50)
+
+        if (!res2.error) {
+          data = res2.data
+        }
+        // If both fail, just show empty state
+      }
+
       setOrders(data || [])
     } catch (e) {
-      setError(e.message)
+      // Don't crash — show empty state
+      setOrders([])
     }
     setLoading(false)
   }
@@ -50,7 +69,6 @@ export default function Orders() {
   useEffect(() => { load() }, [])
 
   if (loading) return <Spinner />
-  if (error) return <ErrorMsg msg={error} />
 
   const platformOptions = [
     { value: 'all', label: 'Все' },

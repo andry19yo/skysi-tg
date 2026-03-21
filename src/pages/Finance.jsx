@@ -26,12 +26,16 @@ export default function Finance() {
 
       const { data: txn, error: e2 } = await supabase
         .from('transactions')
-        .select('*, financial_accounts(name)')
+        .select('*')
         .order('created_at', { ascending: false })
         .limit(20)
 
       if (e2) throw e2
-      setTransactions(txn || [])
+      const txnWithNames = (txn || []).map(t => ({
+        ...t,
+        account_name: (acc || []).find(a => a.id === t.financial_account_id)?.name,
+      }))
+      setTransactions(txnWithNames)
     } catch (e) {
       setError(e.message)
     }
@@ -103,9 +107,9 @@ export default function Finance() {
             <Card key={t.id}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 12 }}>{t.description || t.financial_accounts?.name || '—'}</div>
+                  <div style={{ fontSize: 12 }}>{t.description || t.account_name || '—'}</div>
                   <div style={{ fontSize: 11, color: colors.hint, marginTop: 2 }}>
-                    {t.financial_accounts?.name} &middot; {fmtDateTime(t.created_at)}
+                    {t.account_name} &middot; {fmtDateTime(t.created_at)}
                   </div>
                 </div>
                 <div style={{

@@ -62,7 +62,7 @@ export default function Dashboard() {
 
       const { data: docs } = await supabase
         .from('documents')
-        .select('id, doc_number, doc_type, doc_date, total_amount, status, contractor_id, contractors(name)')
+        .select('id, doc_num, doc_type, doc_date, total_amount, status, contractor_id, contractors(name)')
         .eq('status', 'posted')
         .order('doc_date', { ascending: false })
         .limit(5)
@@ -117,7 +117,7 @@ export default function Dashboard() {
                 <Badge color={DOC_TYPE_COLORS[d.doc_type] || '#888'}>
                   {DOC_TYPE_MAP[d.doc_type] || d.doc_type}
                 </Badge>
-                <span style={{ fontSize: 12, marginLeft: 6 }}>#{d.doc_number}</span>
+                <span style={{ fontSize: 12, marginLeft: 6 }}>#{d.doc_num}</span>
               </div>
               <span style={{ fontSize: 12, color: colors.hint }}>{fmtDate(d.doc_date)}</span>
             </div>
