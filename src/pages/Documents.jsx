@@ -209,7 +209,8 @@ function CreateDraft({ onBack, onCreated }) {
         return {
           document_id: doc.id,
           product_id: it.product_id,
-          product_name: prod?.name || '',
+          name: prod?.name || '',
+          unit: prod?.unit || '',
           qty: Number(it.qty),
           price: Number(it.price || 0),
           amount: Number(it.qty) * Number(it.price || 0),
