@@ -154,14 +154,14 @@ function CreateDraft({ onBack, onCreated }) {
   const [accType, setAccType] = useState('official')
   const [contractorId, setContractorId] = useState('')
   const [contractors, setContractors] = useState([])
-  const [items, setItems] = useState([{ product_id: '', qty: '', price: '' }])
+  const [items, setItems] = useState([{ product_id: '', qty: '', price: '', unit: '' }])
   const [products, setProducts] = useState([])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
 
   useEffect(() => {
     supabase.from('contractors').select('id, name').order('name').then(({ data }) => setContractors(data || []))
-    supabase.from('products').select('id, name, cost').order('name').then(({ data }) => setProducts(data || []))
+    supabase.from('products').select('id, name, cost, qty, unit').order('name').then(({ data }) => setProducts(data || []))
     if (tg?.BackButton) {
       tg.BackButton.show()
       tg.BackButton.onClick(onBack)
@@ -169,12 +169,26 @@ function CreateDraft({ onBack, onCreated }) {
     return () => { if (tg?.BackButton) tg.BackButton.hide() }
   }, [onBack])
 
-  const addItem = () => setItems([...items, { product_id: '', qty: '', price: '' }])
+  const addItem = () => setItems([...items, { product_id: '', qty: '', price: '', unit: '' }])
+
+  const selectProduct = (i, productId) => {
+    const prod = products.find(p => String(p.id) === String(productId))
+    const next = [...items]
+    next[i] = {
+      ...next[i],
+      product_id: productId,
+      price: prod ? String(prod.cost || '') : next[i].price,
+      unit: prod ? (prod.unit || '') : next[i].unit,
+    }
+    setItems(next)
+  }
+
   const updateItem = (i, field, val) => {
     const next = [...items]
     next[i] = { ...next[i], [field]: val }
     setItems(next)
   }
+
   const removeItem = (i) => setItems(items.filter((_, idx) => idx !== i))
 
   const save = async () => {
@@ -185,18 +199,20 @@ function CreateDraft({ onBack, onCreated }) {
     setSaving(true)
     setError(null)
     try {
-      const total = validItems.reduce((s, it) => s + Number(it.qty || 0) * Number(it.price || 0), 0)
+      const totalSum = validItems.reduce((s, it) => s + Number(it.qty || 0) * Number(it.price || 0), 0)
       const PREFIX = { receipt: 'ДОК', invoice: 'СЧ', torg12: 'ТН' }
       const num = (PREFIX[docType] || 'ДОК') + '-' + Date.now().toString().slice(-4)
+
       const { data: doc, error: docErr } = await supabase
         .from('documents')
         .insert({
           doc_type: docType,
           num,
           status: 'draft',
+          posted: false,
           accounting_type: accType,
-          contractor_id: contractorId,
-          amount: total,
+          contractor_id: Number(contractorId),
+          total: totalSum,
           doc_date: new Date().toISOString(),
         })
         .select()
@@ -204,16 +220,19 @@ function CreateDraft({ onBack, onCreated }) {
 
       if (docErr) throw docErr
 
-      const docItems = validItems.map(it => {
-        const prod = products.find(p => p.id === it.product_id)
+      const docItems = validItems.map((it, idx) => {
+        const prod = products.find(p => String(p.id) === String(it.product_id))
+        const qty = Number(it.qty)
+        const price = Number(it.price || 0)
         return {
           document_id: doc.id,
-          product_id: it.product_id,
+          product_id: Number(it.product_id),
           name: prod?.name || '',
-          unit: prod?.unit || '',
-          qty: Number(it.qty),
-          price: Number(it.price || 0),
-          amount: Number(it.qty) * Number(it.price || 0),
+          unit: prod?.unit || it.unit || '',
+          qty,
+          price,
+          amount: qty * price,
+          sort_order: idx + 1,
         }
       })
 
@@ -253,6 +272,8 @@ function CreateDraft({ onBack, onCreated }) {
     appearance: 'auto',
   }
 
+  const inputStyle = { ...selectStyle, marginBottom: 0 }
+
   return (
     <div>
       <SectionTitle>Новый черновик</SectionTitle>
@@ -270,36 +291,66 @@ function CreateDraft({ onBack, onCreated }) {
       </select>
 
       <SectionTitle>Позиции</SectionTitle>
-      {items.map((it, i) => (
-        <Card key={i}>
-          <select value={it.product_id} onChange={e => updateItem(i, 'product_id', e.target.value)} style={{ ...selectStyle, marginBottom: 6 }}>
-            <option value="">— Товар —</option>
-            {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-          </select>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <input
-              type="number"
-              placeholder="Кол-во"
-              value={it.qty}
-              onChange={e => updateItem(i, 'qty', e.target.value)}
-              style={{ ...selectStyle, flex: 1 }}
-            />
-            <input
-              type="number"
-              placeholder="Цена"
-              value={it.price}
-              onChange={e => updateItem(i, 'price', e.target.value)}
-              style={{ ...selectStyle, flex: 1 }}
-            />
-            {items.length > 1 && (
-              <button onClick={() => removeItem(i)} style={{
-                padding: '8px 12px', borderRadius: 8, border: 'none',
-                background: '#f4433622', color: '#f44336', cursor: 'pointer', fontSize: 14,
-              }}>×</button>
+      {items.map((it, i) => {
+        const selProd = products.find(p => String(p.id) === String(it.product_id))
+        return (
+          <Card key={i}>
+            <select
+              value={it.product_id}
+              onChange={e => selectProduct(i, e.target.value)}
+              style={{ ...selectStyle, marginBottom: 6 }}
+            >
+              <option value="">— Товар —</option>
+              {products.map(p => {
+                const stock = Number(p.qty || 0)
+                const label = `${p.name}${p.unit ? ` (${stock} ${p.unit})` : ` (${stock} шт)`}`
+                return (
+                  <option key={p.id} value={p.id} style={{ color: stock === 0 ? '#f44336' : 'inherit' }}>
+                    {label}
+                  </option>
+                )
+              })}
+            </select>
+
+            {selProd && Number(selProd.qty) === 0 && (
+              <div style={{ fontSize: 11, color: '#f44336', marginBottom: 6 }}>
+                Нет в наличии
+              </div>
             )}
-          </div>
-        </Card>
-      ))}
+
+            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+              <input
+                type="number"
+                placeholder="Кол-во"
+                value={it.qty}
+                onChange={e => updateItem(i, 'qty', e.target.value)}
+                style={{ ...inputStyle, flex: 1 }}
+              />
+              <input
+                type="number"
+                placeholder="Цена"
+                value={it.price}
+                onChange={e => updateItem(i, 'price', e.target.value)}
+                style={{ ...inputStyle, flex: 1 }}
+              />
+              {items.length > 1 && (
+                <button onClick={() => removeItem(i)} style={{
+                  padding: '10px 12px', borderRadius: 8, border: 'none',
+                  background: '#f4433622', color: '#f44336', cursor: 'pointer', fontSize: 14,
+                  flexShrink: 0,
+                }}>×</button>
+              )}
+            </div>
+
+            {it.qty && it.price && (
+              <div style={{ fontSize: 11, color: colors.hint, marginTop: 6, textAlign: 'right' }}>
+                Сумма: {fmt(Number(it.qty) * Number(it.price))} ₽
+                {it.unit && <span style={{ marginLeft: 8 }}>ед.: {it.unit}</span>}
+              </div>
+            )}
+          </Card>
+        )
+      })}
 
       <button onClick={addItem} style={{
         width: '100%', padding: '10px', borderRadius: 10,
