@@ -42,7 +42,7 @@ export default function Documents() {
     try {
       let query = supabase
         .from('documents')
-        .select('id, num, doc_type, doc_date, total_amount, status, accounting_type, contractor_id, contractors(name)')
+        .select('id, num, doc_type, doc_date, amount, status, accounting_type, contractor_id, contractors(name)')
         .order('doc_date', { ascending: false })
         .limit(50)
 
@@ -139,7 +139,7 @@ export default function Documents() {
               <span style={{ color: colors.hint, marginLeft: 8, fontSize: 12 }}>{d.contractors?.name || ''}</span>
             </div>
             <div style={{ fontSize: 14, fontWeight: 600, marginTop: 4 }}>
-              {fmt(d.total_amount)} ₽
+              {fmt(d.amount)} ₽
             </div>
           </Card>
         ))
@@ -193,7 +193,7 @@ function CreateDraft({ onBack, onCreated }) {
           status: 'draft',
           accounting_type: accType,
           contractor_id: contractorId,
-          total_amount: total,
+          amount: total,
           doc_date: new Date().toISOString(),
         })
         .select()

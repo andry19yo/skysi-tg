@@ -121,7 +121,7 @@ export default function DocDetail({ docId, onBack, onNavigate }) {
           {doc.contractors?.name || '—'}
         </div>
         <div style={{ fontSize: 18, fontWeight: 600, marginTop: 4 }}>
-          {fmt(doc.total_amount)} ₽
+          {fmt(doc.amount)} ₽
         </div>
       </Card>
 
@@ -180,7 +180,7 @@ export default function DocDetail({ docId, onBack, onNavigate }) {
           <Card style={{ background: 'transparent', border: 'none', padding: '4px 16px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, fontWeight: 600 }}>
               <span>Итого:</span>
-              <span>{fmt(doc.total_amount)} ₽</span>
+              <span>{fmt(doc.amount)} ₽</span>
             </div>
           </Card>
         </>

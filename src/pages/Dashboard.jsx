@@ -23,13 +23,13 @@ export default function Dashboard() {
 
       const { data: salesData } = await supabase
         .from('documents')
-        .select('total_amount')
+        .select('amount')
         .in('doc_type', ['torg12', 'отгрузка'])
         .eq('status', 'posted')
         .eq('accounting_type', 'official')
         .gte('doc_date', startOfMonth)
 
-      setSales((salesData || []).reduce((s, d) => s + Number(d.total_amount || 0), 0))
+      setSales((salesData || []).reduce((s, d) => s + Number(d.amount || 0), 0))
 
       const { data: accounts } = await supabase
         .from('financial_accounts')
@@ -62,7 +62,7 @@ export default function Dashboard() {
 
       const { data: docs } = await supabase
         .from('documents')
-        .select('id, num, doc_type, doc_date, total_amount, status, contractor_id, contractors(name)')
+        .select('id, num, doc_type, doc_date, amount, status, contractor_id, contractors(name)')
         .eq('status', 'posted')
         .order('doc_date', { ascending: false })
         .limit(5)
@@ -125,7 +125,7 @@ export default function Dashboard() {
               {d.contractors?.name || '—'}
             </div>
             <div style={{ fontSize: 14, fontWeight: 600, marginTop: 4 }}>
-              {fmt(d.total_amount)} ₽
+              {fmt(d.amount)} ₽
             </div>
           </Card>
         ))

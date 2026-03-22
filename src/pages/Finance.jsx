@@ -60,7 +60,7 @@ export default function Finance() {
 
   let filteredTxn = transactions
   if (filterAccount !== 'all') {
-    filteredTxn = filteredTxn.filter(t => String(t.account_id) === filterAccount)
+    filteredTxn = filteredTxn.filter(t => String(t.financial_account_id) === filterAccount)
   }
   if (filterType === 'income') {
     filteredTxn = filteredTxn.filter(t => Number(t.amount) > 0)
