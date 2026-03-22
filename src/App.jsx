@@ -10,6 +10,8 @@ import Documents from './pages/Documents.jsx'
 import Finance from './pages/Finance.jsx'
 import Orders from './pages/Orders.jsx'
 
+const CACHE_KEY = 'skysi_tg_user'
+const TABS = ['dashboard', 'warehouse', 'documents', 'finance', 'orders']
 const PAGE_MAP = {
   dashboard: Dashboard,
   warehouse: Warehouse,
@@ -18,19 +20,40 @@ const PAGE_MAP = {
   orders: Orders,
 }
 
+function copyText(text) {
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(text).catch(() => {})
+  } else {
+    const el = document.createElement('textarea')
+    el.value = text
+    document.body.appendChild(el)
+    el.select()
+    document.execCommand('copy')
+    document.body.removeChild(el)
+  }
+}
+
 export default function App() {
-  const [authState, setAuthState] = useState('loading') // loading | denied | blocked | ok | dev_prompt
+  // authState: loading | login | checking | blocked | ok | dev_prompt
+  const [authState, setAuthState] = useState('loading')
   const [user, setUser] = useState(null)
   const [telegramId, setTelegramId] = useState(null)
   const [tab, setTab] = useState('dashboard')
+  // Lazy tabs: track which tabs have been visited (mounted once, kept in DOM)
+  const [visitedTabs, setVisitedTabs] = useState(new Set(['dashboard']))
   const [devId, setDevId] = useState('')
+  const [loginError, setLoginError] = useState(null)
+  const [copied, setCopied] = useState(false)
 
-  const authenticate = useCallback(async (tgId) => {
+  // authenticate: check telegram_id in DB
+  // silent=true: background re-check (don't change state on success)
+  const authenticate = useCallback(async (tgId, silent = false) => {
     if (!tgId) {
-      setAuthState('denied')
+      if (!silent) setAuthState('login')
       return
     }
-    setTelegramId(tgId)
+    if (!silent) setAuthState('checking')
+
     const { data, error } = await supabase
       .from('telegram_users')
       .select('*')
@@ -38,39 +61,105 @@ export default function App() {
       .single()
 
     if (error || !data) {
-      setAuthState('denied')
+      if (!silent) {
+        setLoginError('Нет доступа. Отправьте ваш ID администратору @andry054')
+        setAuthState('login')
+      }
       return
     }
+
     if (!data.is_active) {
+      // If cached user was deactivated — clear cache and block
+      localStorage.removeItem(CACHE_KEY)
       setAuthState('blocked')
       return
     }
+
+    // Save to cache
+    localStorage.setItem(CACHE_KEY, JSON.stringify({
+      telegram_id: data.telegram_id,
+      role: data.role,
+      name: data.name,
+      telegram_username: data.telegram_username,
+    }))
     setUser(data)
-    setAuthState('ok')
+    if (!silent) setAuthState('ok')
   }, [])
 
   useEffect(() => {
+    // 1. Try localStorage cache first
+    try {
+      const raw = localStorage.getItem(CACHE_KEY)
+      if (raw) {
+        const cached = JSON.parse(raw)
+        setUser(cached)
+        setTelegramId(cached.telegram_id)
+        setAuthState('ok')
+        // Verify in background (deactivation check)
+        authenticate(cached.telegram_id, true)
+        return
+      }
+    } catch (_) {}
+
+    // 2. No cache — get Telegram user
     const tgUser = tg?.initDataUnsafe?.user
     if (tgUser?.id) {
-      authenticate(tgUser.id)
+      setTelegramId(tgUser.id)
+      setAuthState('login')
     } else if (!tg) {
       // Dev mode — no Telegram context
       setAuthState('dev_prompt')
     } else {
-      setAuthState('denied')
+      // Telegram context present but no user
+      setAuthState('login')
     }
   }, [authenticate])
 
-  // Dev mode login
+  const handleLogin = () => {
+    setLoginError(null)
+    authenticate(telegramId)
+  }
+
   const handleDevLogin = (e) => {
     e.preventDefault()
     const id = parseInt(devId, 10)
     if (id) {
-      setAuthState('loading')
+      setTelegramId(id)
+      setLoginError(null)
       authenticate(id)
     }
   }
 
+  const handleCopyId = () => {
+    if (!telegramId) return
+    copyText(String(telegramId))
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+    if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('light')
+  }
+
+  const handleTabChange = (newTab) => {
+    setTab(newTab)
+    setVisitedTabs(prev => new Set([...prev, newTab]))
+  }
+
+  // ── Styles ──────────────────────────────────────────────────
+  const pageWrap = {
+    display: 'flex', flexDirection: 'column', alignItems: 'center',
+    justifyContent: 'center', minHeight: '100vh', padding: 32,
+    background: colors.bg, color: colors.text,
+    fontFamily: "'IBM Plex Mono', monospace",
+  }
+
+  const btnPrimary = {
+    width: '100%', maxWidth: 280, padding: '14px',
+    borderRadius: 12, border: 'none',
+    background: colors.button, color: colors.buttonText,
+    fontSize: 14, fontWeight: 600, cursor: 'pointer',
+    fontFamily: 'inherit',
+  }
+
+  // ── Loading ──────────────────────────────────────────────────
   if (authState === 'loading') {
     return (
       <div style={{ background: colors.bg, minHeight: '100vh', fontFamily: "'IBM Plex Mono', monospace" }}>
@@ -79,84 +168,128 @@ export default function App() {
     )
   }
 
+  // ── Dev mode (no Telegram context) ──────────────────────────
   if (authState === 'dev_prompt') {
     return (
-      <div style={{
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        minHeight: '100vh',
-        padding: 32,
-        background: colors.bg,
-        color: colors.text,
-        fontFamily: "'IBM Plex Mono', monospace",
-      }}>
-        <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 16 }}>Dev Mode</div>
-        <div style={{ fontSize: 12, color: colors.hint, marginBottom: 20 }}>
+      <div style={pageWrap}>
+        <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: 2, marginBottom: 4 }}>SKYSI</div>
+        <div style={{ fontSize: 11, color: colors.hint, marginBottom: 32, letterSpacing: 1 }}>
+          Dev Mode
+        </div>
+        <div style={{ fontSize: 12, color: colors.hint, marginBottom: 16, textAlign: 'center' }}>
           Telegram WebApp недоступен. Введите telegram_id:
         </div>
-        <form onSubmit={handleDevLogin} style={{ display: 'flex', gap: 8 }}>
+        <form onSubmit={handleDevLogin} style={{ display: 'flex', gap: 8, width: '100%', maxWidth: 280 }}>
           <input
             type="text"
             value={devId}
             onChange={e => setDevId(e.target.value)}
             placeholder="telegram_id"
             style={{
-              padding: '10px 14px',
-              borderRadius: 10,
+              flex: 1, padding: '10px 14px', borderRadius: 10,
               border: `1px solid ${colors.border}`,
-              background: colors.secondaryBg,
-              color: colors.text,
-              fontSize: 14,
-              outline: 'none',
-              fontFamily: 'inherit',
-              width: 180,
+              background: colors.secondaryBg, color: colors.text,
+              fontSize: 14, outline: 'none', fontFamily: 'inherit',
             }}
           />
           <button type="submit" style={{
-            padding: '10px 20px',
-            borderRadius: 10,
-            border: 'none',
-            background: colors.button,
-            color: colors.buttonText,
-            fontSize: 14,
-            cursor: 'pointer',
-            fontFamily: 'inherit',
+            padding: '10px 18px', borderRadius: 10, border: 'none',
+            background: colors.button, color: colors.buttonText,
+            fontSize: 13, cursor: 'pointer', fontFamily: 'inherit',
           }}>
             Войти
           </button>
         </form>
+        {loginError && (
+          <div style={{
+            marginTop: 16, padding: '10px 16px', borderRadius: 10,
+            background: '#f4433622', fontSize: 12, color: '#f44336',
+            textAlign: 'center', maxWidth: 280, lineHeight: 1.6,
+          }}>
+            {loginError}
+          </div>
+        )}
       </div>
     )
   }
 
-  if (authState === 'denied') {
-    return <AccessDenied telegramId={telegramId} />
+  // ── Login screen (Telegram context present) ──────────────────
+  if (authState === 'login' || authState === 'checking') {
+    const isChecking = authState === 'checking'
+    return (
+      <div style={pageWrap}>
+        <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: 2, marginBottom: 4 }}>SKYSI</div>
+        <div style={{ fontSize: 11, color: colors.hint, marginBottom: 40, letterSpacing: 1 }}>
+          управление бизнесом
+        </div>
+
+        {telegramId ? (
+          <>
+            <div style={{ fontSize: 11, color: colors.hint, marginBottom: 8, letterSpacing: 1 }}>
+              ВАШ TELEGRAM ID
+            </div>
+            <div style={{
+              fontSize: 32, fontWeight: 700, letterSpacing: 3,
+              color: colors.text, marginBottom: 12,
+            }}>
+              {telegramId}
+            </div>
+            <button onClick={handleCopyId} style={{
+              padding: '8px 20px', borderRadius: 8,
+              border: `1px solid ${colors.border}`,
+              background: 'transparent',
+              color: copied ? '#4caf50' : colors.hint,
+              fontSize: 12, cursor: 'pointer', fontFamily: 'inherit',
+              marginBottom: 40, transition: 'color 0.2s',
+            }}>
+              {copied ? '✓ Скопировано' : 'Скопировать ID'}
+            </button>
+          </>
+        ) : (
+          <div style={{ fontSize: 13, color: colors.hint, marginBottom: 40, textAlign: 'center' }}>
+            ID не определён
+          </div>
+        )}
+
+        {loginError && (
+          <div style={{
+            marginBottom: 16, padding: '12px 16px', borderRadius: 10,
+            background: '#f4433622', fontSize: 12, color: '#f44336',
+            textAlign: 'center', maxWidth: 280, lineHeight: 1.6,
+          }}>
+            {loginError}
+          </div>
+        )}
+
+        <button
+          onClick={handleLogin}
+          disabled={isChecking || !telegramId}
+          style={{ ...btnPrimary, opacity: (isChecking || !telegramId) ? 0.6 : 1 }}
+        >
+          {isChecking ? 'Проверка...' : 'Войти'}
+        </button>
+      </div>
+    )
   }
 
+  // ── Blocked ──────────────────────────────────────────────────
   if (authState === 'blocked') {
     return <AccessDenied telegramId={telegramId} blocked />
   }
 
-  const Page = PAGE_MAP[tab]
-
+  // ── App (authState === 'ok') ──────────────────────────────────
   return (
     <div style={{
-      display: 'flex',
-      flexDirection: 'column',
-      minHeight: '100vh',
-      background: colors.bg,
-      color: colors.text,
+      display: 'flex', flexDirection: 'column', minHeight: '100vh',
+      background: colors.bg, color: colors.text,
       fontFamily: "'IBM Plex Mono', monospace",
     }}>
+      {/* Header */}
       <div style={{
         padding: '10px 16px',
         background: colors.secondaryBg,
         borderBottom: `1px solid ${colors.border}`,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
       }}>
         <div>
           <div style={{ fontSize: 15, fontWeight: 600, letterSpacing: 2 }}>SKYSI</div>
@@ -167,11 +300,20 @@ export default function App() {
         </div>
       </div>
 
+      {/* Content — lazy: render tab only after first visit, keep in DOM */}
       <div style={{ flex: 1, overflowY: 'auto', padding: 12 }}>
-        <Page user={user} />
+        {TABS.map(t => {
+          if (!visitedTabs.has(t)) return null
+          const Page = PAGE_MAP[t]
+          return (
+            <div key={t} style={{ display: t === tab ? 'block' : 'none' }}>
+              <Page user={user} />
+            </div>
+          )
+        })}
       </div>
 
-      <BottomNav active={tab} onChange={setTab} />
+      <BottomNav active={tab} onChange={handleTabChange} />
     </div>
   )
 }
