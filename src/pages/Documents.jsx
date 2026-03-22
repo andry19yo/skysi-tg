@@ -203,6 +203,7 @@ function CreateDraft({ onBack, onCreated }) {
       const PREFIX = { receipt: 'ДОК', invoice: 'СЧ', torg12: 'ТН' }
       const num = (PREFIX[docType] || 'ДОК') + '-' + Date.now().toString().slice(-4)
 
+      const contractor = contractors.find(c => String(c.id) === String(contractorId))
       const { data: doc, error: docErr } = await supabase
         .from('documents')
         .insert({
@@ -212,7 +213,8 @@ function CreateDraft({ onBack, onCreated }) {
           posted: false,
           accounting_type: accType,
           contractor_id: Number(contractorId),
-          total: totalSum,
+          contractor_name: contractor?.name || '',
+          amount: totalSum,
           doc_date: new Date().toISOString(),
         })
         .select()
