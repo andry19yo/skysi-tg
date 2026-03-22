@@ -31,12 +31,13 @@ export default function DocDetail({ docId, onBack, onNavigate }) {
         setDoc(docData)
 
         // Document items
-        const { data: itemsData } = await supabase
+        const { data: itemsData, error: itemsErr } = await supabase
           .from('document_items')
-          .select('*, products(name)')
+          .select('*')
           .eq('document_id', docId)
           .order('id')
 
+        console.log('items:', itemsData, 'err:', itemsErr)
         if (!cancelled) setItems(itemsData || [])
 
         // Base document
@@ -169,10 +170,10 @@ export default function DocDetail({ docId, onBack, onNavigate }) {
           {items.map((it, i) => (
             <Card key={it.id || i}>
               <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>
-                {it.products?.name || it.product_name || `Позиция ${i + 1}`}
+                {it.product_name || it.products?.name || `Позиция ${i + 1}`}
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: colors.hint }}>
-                <span>{it.quantity} x {fmt(it.price)}</span>
+                <span>{it.qty ?? it.quantity} x {fmt(it.price)}</span>
                 <span style={{ fontWeight: 600, color: colors.text }}>{fmt(it.amount)} ₽</span>
               </div>
             </Card>

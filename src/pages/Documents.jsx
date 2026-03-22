@@ -186,10 +186,13 @@ function CreateDraft({ onBack, onCreated }) {
     setError(null)
     try {
       const total = validItems.reduce((s, it) => s + Number(it.qty || 0) * Number(it.price || 0), 0)
+      const PREFIX = { receipt: 'ДОК', invoice: 'СЧ', torg12: 'ТН' }
+      const num = (PREFIX[docType] || 'ДОК') + '-' + Date.now().toString().slice(-4)
       const { data: doc, error: docErr } = await supabase
         .from('documents')
         .insert({
           doc_type: docType,
+          num,
           status: 'draft',
           accounting_type: accType,
           contractor_id: contractorId,
@@ -201,13 +204,17 @@ function CreateDraft({ onBack, onCreated }) {
 
       if (docErr) throw docErr
 
-      const docItems = validItems.map(it => ({
-        document_id: doc.id,
-        product_id: it.product_id,
-        quantity: Number(it.qty),
-        price: Number(it.price || 0),
-        amount: Number(it.qty) * Number(it.price || 0),
-      }))
+      const docItems = validItems.map(it => {
+        const prod = products.find(p => p.id === it.product_id)
+        return {
+          document_id: doc.id,
+          product_id: it.product_id,
+          product_name: prod?.name || '',
+          qty: Number(it.qty),
+          price: Number(it.price || 0),
+          amount: Number(it.qty) * Number(it.price || 0),
+        }
+      })
 
       const { error: itemsErr } = await supabase.from('document_items').insert(docItems)
       if (itemsErr) throw itemsErr
