@@ -92,7 +92,7 @@ export default function Dashboard() {
           .order('doc_date', { ascending: false }).limit(5),
         // Cost breakdown: document_items with product cost for direct sales
         supabase.from('document_items')
-          .select('qty, price, product_id, products(name, cost), documents!inner(contractor_id)')
+          .select('qty, price, product_id, products(name, cost), documents!inner(contractor_id, accounting_type)')
           .in('documents.doc_type', ['torg12', 'ttn'])
           .eq('documents.status', 'posted')
           .gte('documents.doc_date', from)
@@ -107,15 +107,18 @@ export default function Dashboard() {
         const cid = i.documents?.contractor_id
         return cid !== 2 && cid !== 8
       })
-      let totalCost = 0, totalRevenue = 0
+      let totalCost = 0, totalRevenue = 0, officialRevenue = 0
       for (const it of directItems) {
         const qty = Number(it.qty || 0)
         const cost = Number(it.products?.cost || 0)
         const price = Number(it.price || 0)
         totalCost += qty * cost
         totalRevenue += qty * price
+        if (it.documents?.accounting_type === 'official') {
+          officialRevenue += qty * price
+        }
       }
-      const salesTax = Math.round(totalRevenue * TAX_RATE)
+      const salesTax = Math.round(officialRevenue * TAX_RATE)
       const salesProfit = totalRevenue - totalCost - salesTax
       const balance = (accRes.data || []).filter(a => a.include_in_balance !== false)
         .reduce((s, a) => s + Number(a.balance || 0), 0)
@@ -144,7 +147,7 @@ export default function Dashboard() {
 
       setData({
         sales, balance, debit, credit, redZone,
-        totalCost, totalRevenue, salesTax, salesProfit,
+        totalCost, totalRevenue, officialRevenue, salesTax, salesProfit,
         draftsCount: draftsRes.count || 0,
         recentDocs: docsRes.data || [],
       })
@@ -199,7 +202,7 @@ export default function Dashboard() {
           {[
             { label: 'Выручка', value: data.totalRevenue, color: PROFIT_COLOR, bold: true },
             { label: 'Себестоимость', value: -data.totalCost, color: '#ff9800' },
-            { label: 'Налог УСН 6%', value: -data.salesTax, color: '#ff9800' },
+            { label: `Налог УСН 6% (от ${fmt(data.officialRevenue)} ₽ офиц.)`, value: -data.salesTax, color: '#ff9800' },
             null,
             { label: 'Чистая прибыль (прямые)', value: data.salesProfit, color: data.salesProfit >= 0 ? PROFIT_COLOR : LOSS_COLOR, bold: true },
           ].map((row, i) => row === null ? (
