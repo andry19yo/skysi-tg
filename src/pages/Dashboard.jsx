@@ -62,6 +62,7 @@ export default function Dashboard() {
   const [customFrom, setCustomFrom] = useState('')
   const [customTo, setCustomTo] = useState('')
   const [redZoneOpen, setRedZoneOpen] = useState(false)
+  const [salesOpen, setSalesOpen] = useState(false)
   const [wbProfit, setWbProfit] = useState(null)
   const [wbLoading, setWbLoading] = useState(false)
 
@@ -78,7 +79,7 @@ export default function Dashboard() {
     try {
       const { from, to } = getDateRange()
 
-      const [salesRes, accRes, contrRes, prodRes, draftsRes, docsRes] = await Promise.all([
+      const [salesRes, accRes, contrRes, prodRes, draftsRes, docsRes, diRes] = await Promise.all([
         supabase.from('documents').select('amount, contractor_id')
           .in('doc_type', ['torg12', 'ttn']).eq('status', 'posted')
           .gte('doc_date', from).lte('doc_date', to),
@@ -89,10 +90,33 @@ export default function Dashboard() {
         supabase.from('documents').select('id', { count: 'exact', head: true }).eq('status', 'draft'),
         supabase.from('documents').select('id, num, doc_type, doc_date, amount, status, contractor_id, contractors(name)')
           .order('doc_date', { ascending: false }).limit(5),
+        // Cost breakdown: document_items with product cost for direct sales
+        supabase.from('document_items')
+          .select('qty, price, product_id, products(name, cost), documents!inner(contractor_id)')
+          .in('documents.doc_type', ['torg12', 'ttn'])
+          .eq('documents.status', 'posted')
+          .gte('documents.doc_date', from)
+          .lte('documents.doc_date', to),
       ])
 
       const directSales = (salesRes.data || []).filter(d => d.contractor_id !== 2 && d.contractor_id !== 8)
       const sales = directSales.reduce((s, d) => s + Number(d.amount || 0), 0)
+
+      // Calculate cost from document_items (exclude MP contractors)
+      const directItems = (diRes.data || []).filter(i => {
+        const cid = i.documents?.contractor_id
+        return cid !== 2 && cid !== 8
+      })
+      let totalCost = 0, totalRevenue = 0
+      for (const it of directItems) {
+        const qty = Number(it.qty || 0)
+        const cost = Number(it.products?.cost || 0)
+        const price = Number(it.price || 0)
+        totalCost += qty * cost
+        totalRevenue += qty * price
+      }
+      const salesTax = Math.round(totalRevenue * TAX_RATE)
+      const salesProfit = totalRevenue - totalCost - salesTax
       const balance = (accRes.data || []).filter(a => a.include_in_balance !== false)
         .reduce((s, a) => s + Number(a.balance || 0), 0)
 
@@ -120,6 +144,7 @@ export default function Dashboard() {
 
       setData({
         sales, balance, debit, credit, redZone,
+        totalCost, totalRevenue, salesTax, salesProfit,
         draftsCount: draftsRes.count || 0,
         recentDocs: docsRes.data || [],
       })
@@ -164,7 +189,34 @@ export default function Dashboard() {
         </div>
       )}
 
-      <MetricCard label="Выручка (прямые продажи)" value={fmt(data.sales) + ' ₽'} accent={PROFIT_COLOR} color={PROFIT_COLOR} />
+      {/* Выручка — expandable with P&L */}
+      <div onClick={() => setSalesOpen(prev => !prev)} style={{ cursor: 'pointer' }}>
+        <MetricCard label="Выручка (прямые продажи)" value={fmt(data.sales) + ' ₽'} accent={PROFIT_COLOR} color={PROFIT_COLOR}
+          sub={salesOpen ? '' : `прибыль ${fmt(data.salesProfit)} ₽ · нажмите для детализации`} />
+      </div>
+      {salesOpen && (
+        <Card style={{ marginTop: -4 }}>
+          {[
+            { label: 'Выручка', value: data.totalRevenue, color: PROFIT_COLOR, bold: true },
+            { label: 'Себестоимость', value: -data.totalCost, color: '#ff9800' },
+            { label: 'Налог УСН 6%', value: -data.salesTax, color: '#ff9800' },
+            null,
+            { label: 'Чистая прибыль (прямые)', value: data.salesProfit, color: data.salesProfit >= 0 ? PROFIT_COLOR : LOSS_COLOR, bold: true },
+          ].map((row, i) => row === null ? (
+            <div key={i} style={{ borderTop: `1px solid ${colors.border}`, margin: '4px 0' }} />
+          ) : (
+            <div key={i} style={{
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+              padding: '4px 0', fontSize: 12, fontWeight: row.bold ? 600 : 400,
+            }}>
+              <span style={{ color: row.bold ? colors.text : colors.hint }}>{row.label}</span>
+              <span style={{ color: row.color, fontWeight: row.bold ? 700 : 500 }}>
+                {row.value < 0 ? '−' : ''}{fmt(Math.abs(row.value))} ₽
+              </span>
+            </div>
+          ))}
+        </Card>
+      )}
 
       {/* WB Profit */}
       <MetricCard
