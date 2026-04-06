@@ -21,9 +21,10 @@ function getPeriodDates(period) {
   if (period === 'week') {
     from = new Date(now.getTime() - 7 * 86400000)
   } else if (period === '3month') {
-    from = new Date(now.getFullYear(), now.getMonth() - 3, 1)
+    from = new Date(now.getTime() - 90 * 86400000)
   } else {
-    from = new Date(now.getFullYear(), now.getMonth(), 1)
+    // month = last 30 days
+    from = new Date(now.getTime() - 30 * 86400000)
   }
   return { from: from.toISOString().slice(0, 10), to: now.toISOString().slice(0, 10) }
 }
@@ -84,7 +85,7 @@ export default function Dashboard() {
         supabase.from('financial_accounts').select('balance, include_in_balance').eq('is_active', true),
         supabase.from('contractors').select('balance'),
         supabase.from('products').select('id, name, qty, unit, category')
-          .lt('qty', 20).order('qty', { ascending: true }).limit(20),
+          .order('qty', { ascending: true }),
         supabase.from('documents').select('id', { count: 'exact', head: true }).eq('status', 'draft'),
         supabase.from('documents').select('id, num, doc_type, doc_date, amount, status, contractor_id, contractors(name)')
           .order('doc_date', { ascending: false }).limit(5),
