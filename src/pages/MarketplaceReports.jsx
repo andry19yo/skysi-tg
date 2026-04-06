@@ -8,25 +8,39 @@ const OZON_COLOR = '#005BFF'
 const PROFIT_COLOR = '#10B981'
 const LOSS_COLOR = '#EF4444'
 
+function getDefaultDates() {
+  const now = new Date()
+  const from = new Date(now.getFullYear(), now.getMonth() - 2, 1)
+  return {
+    dateFrom: from.toISOString().slice(0, 10),
+    dateTo: now.toISOString().slice(0, 10),
+  }
+}
+
 export default function MarketplaceReports() {
   const [loading, setLoading] = useState(true)
   const [reports, setReports] = useState([])
+  const [products, setProducts] = useState([])
   const [tab, setTab] = useState('summary')
+  const { dateFrom: defFrom, dateTo: defTo } = getDefaultDates()
+  const [dateFrom, setDateFrom] = useState(defFrom)
+  const [dateTo, setDateTo] = useState(defTo)
 
   useEffect(() => {
     const load = async () => {
       setLoading(true)
-      const { data } = await supabase
-        .from('marketplace_reports')
-        .select('*')
-        .order('period_from', { ascending: false })
-      setReports(data || [])
+      const [repRes, prodRes] = await Promise.all([
+        supabase.from('marketplace_reports').select('*')
+          .gte('period_from', dateFrom).lte('period_to', dateTo)
+          .order('period_from', { ascending: false }),
+        supabase.from('products').select('id, name, cost'),
+      ])
+      setReports(repRes.data || [])
+      setProducts(prodRes.data || [])
       setLoading(false)
     }
     load()
-  }, [])
-
-  if (loading) return <Spinner />
+  }, [dateFrom, dateTo])
 
   const tabs = [
     { value: 'summary', label: 'Сводка', color: PROFIT_COLOR },
@@ -34,45 +48,105 @@ export default function MarketplaceReports() {
     { value: 'ozon', label: 'Ozon', color: OZON_COLOR },
   ]
 
+  const inputStyle = {
+    padding: '7px 10px', borderRadius: 8,
+    border: `1px solid ${colors.border}`,
+    background: colors.secondaryBg, color: colors.text,
+    fontSize: 11, outline: 'none', fontFamily: 'inherit',
+    flex: 1, minWidth: 0,
+  }
+
   return (
     <div>
       <SectionTitle>Маркетплейсы</SectionTitle>
+
+      <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+        <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} style={inputStyle} />
+        <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} style={inputStyle} />
+      </div>
+
       <TabBar tabs={tabs} value={tab} onChange={setTab} />
 
-      {tab === 'summary' && <SummaryTab reports={reports} />}
-      {tab === 'wb' && <MPTab reports={reports.filter(r => r.marketplace === 'wb')} color={WB_COLOR} name="Wildberries" />}
-      {tab === 'ozon' && <MPTab reports={reports.filter(r => r.marketplace === 'ozon')} color={OZON_COLOR} name="Ozon" />}
+      {loading ? <Spinner /> : (
+        <>
+          {tab === 'summary' && <SummaryTab reports={reports} products={products} />}
+          {tab === 'wb' && <MPTab reports={reports.filter(r => r.marketplace === 'wb')} products={products} color={WB_COLOR} name="Wildberries" />}
+          {tab === 'ozon' && <MPTab reports={reports.filter(r => r.marketplace === 'ozon')} products={products} color={OZON_COLOR} name="Ozon" />}
+        </>
+      )}
     </div>
   )
 }
 
-function SummaryTab({ reports }) {
-  // Aggregate latest reports from each marketplace
-  const latestWB = reports.filter(r => r.marketplace === 'wb').sort((a, b) => b.period_to.localeCompare(a.period_to))[0]
-  const latestOzon = reports.filter(r => r.marketplace === 'ozon').sort((a, b) => b.period_to.localeCompare(a.period_to))[0]
+// Match MP item name to product cost
+function findCost(itemName, products) {
+  if (!itemName) return 0
+  const n = itemName.toLowerCase()
 
-  const totalRevenue = num(latestWB?.revenue) + num(latestOzon?.revenue)
-  const totalLogistics = num(latestWB?.logistics) + num(latestOzon?.logistics)
-  const totalReturns = Math.abs(num(latestWB?.returns)) + Math.abs(num(latestOzon?.returns))
-  const totalPenalties = num(latestWB?.penalties) + num(latestOzon?.penalties)
-  const totalPayout = num(latestWB?.payout) + num(latestOzon?.payout)
-  const totalExpenses = totalLogistics + totalReturns + totalPenalties
+  // Extract volume
+  let volume = ''
+  const volMatch = n.match(/(\d+)\s*л/)
+  if (volMatch) volume = volMatch[1] + 'л'
+
+  // Detect brand
+  let brand = ''
+  if (n.includes('ext')) brand = 'Extreme'
+  else if (n.includes('midline') || n.includes('worker')) brand = 'Midline'
+  else if (n.includes('eco') || n.includes('newius')) brand = 'Eco'
+
+  if (!brand) return 0
+
+  // Try to match product
+  for (const p of products) {
+    const pn = p.name.toLowerCase()
+    if (pn.includes(brand.toLowerCase()) && volume && pn.includes(volume)) {
+      return Number(p.cost || 0)
+    }
+  }
+  return 0
+}
+
+function calcCostFromItems(reports, products) {
+  let totalCost = 0
+  for (const r of reports) {
+    if (!r.items) continue
+    const items = typeof r.items === 'string' ? JSON.parse(r.items) : r.items
+    for (const it of items) {
+      const cost = findCost(it.name, products)
+      const qty = Number(it.qty_sold || 0) - Number(it.qty_returned || 0)
+      totalCost += cost * qty
+    }
+  }
+  return totalCost
+}
+
+function SummaryTab({ reports, products }) {
+  if (reports.length === 0) return <EmptyState text="Нет данных за выбранный период" />
+
+  // Aggregate all reports in period
+  let totalRevenue = 0, totalLogistics = 0, totalReturns = 0, totalPenalties = 0, totalPayout = 0
+  for (const r of reports) {
+    totalRevenue += num(r.revenue)
+    totalLogistics += num(r.logistics)
+    totalReturns += Math.abs(num(r.returns))
+    totalPenalties += num(r.penalties)
+    totalPayout += num(r.payout)
+  }
+
+  const totalCost = calcCostFromItems(reports, products)
   const tax = totalPayout * 0.06
-  const profit = totalPayout - tax
-
-  if (!latestWB && !latestOzon) return <EmptyState text="Нет данных по маркетплейсам" />
+  const profit = totalPayout - totalCost - tax
 
   return (
     <div>
-      {/* P&L metrics */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
         <MetricCard label="Выручка" value={fmt(totalRevenue) + ' ₽'} accent={PROFIT_COLOR} color={PROFIT_COLOR} />
         <MetricCard label="К перечислению" value={fmt(totalPayout) + ' ₽'} accent={PROFIT_COLOR} color={PROFIT_COLOR} />
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+        <MetricCard label="Себестоимость" value={fmt(totalCost) + ' ₽'} accent="#ff9800" color="#ff9800" />
         <MetricCard label="Логистика" value={fmt(totalLogistics) + ' ₽'} accent={LOSS_COLOR} color={LOSS_COLOR} />
-        <MetricCard label="Возвраты" value={fmt(totalReturns) + ' ₽'} accent={LOSS_COLOR} color={LOSS_COLOR} />
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
@@ -95,36 +169,46 @@ function SummaryTab({ reports }) {
         <PLRow label="  Штрафы" value={-totalPenalties} color={LOSS_COLOR} />
         <PLSep />
         <PLRow label="К перечислению" value={totalPayout} color={colors.text} bold />
+        <PLRow label="  Себестоимость" value={-totalCost} color="#ff9800" />
         <PLRow label="  Налог УСН 6%" value={-tax} color="#ff9800" />
         <PLSep />
         <PLRow label="Чистая прибыль" value={profit} color={profit >= 0 ? PROFIT_COLOR : LOSS_COLOR} bold big />
       </Card>
 
-      {/* Per-marketplace breakdown */}
+      {/* Per-marketplace */}
       <SectionTitle>По площадкам</SectionTitle>
-      {latestWB && (
-        <Card>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-            <span style={{ fontSize: 12, fontWeight: 600, color: WB_COLOR }}>Wildberries</span>
-            <span style={{ fontSize: 10, color: colors.hint }}>{fmtDate(latestWB.period_from)} — {fmtDate(latestWB.period_to)}</span>
-          </div>
-          <MiniPL revenue={num(latestWB.revenue)} logistics={num(latestWB.logistics)} returns={Math.abs(num(latestWB.returns))} payout={num(latestWB.payout)} />
-        </Card>
-      )}
-      {latestOzon && (
-        <Card>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-            <span style={{ fontSize: 12, fontWeight: 600, color: OZON_COLOR }}>Ozon</span>
-            <span style={{ fontSize: 10, color: colors.hint }}>{fmtDate(latestOzon.period_from)} — {fmtDate(latestOzon.period_to)}</span>
-          </div>
-          <MiniPL revenue={num(latestOzon.revenue)} logistics={num(latestOzon.logistics)} returns={Math.abs(num(latestOzon.returns))} payout={num(latestOzon.payout)} />
-        </Card>
-      )}
+      {renderMPSummary(reports.filter(r => r.marketplace === 'wb'), products, 'Wildberries', WB_COLOR)}
+      {renderMPSummary(reports.filter(r => r.marketplace === 'ozon'), products, 'Ozon', OZON_COLOR)}
     </div>
   )
 }
 
-function MPTab({ reports, color, name }) {
+function renderMPSummary(reports, products, name, color) {
+  if (reports.length === 0) return null
+  let revenue = 0, logistics = 0, returns = 0, payout = 0
+  for (const r of reports) {
+    revenue += num(r.revenue)
+    logistics += num(r.logistics)
+    returns += Math.abs(num(r.returns))
+    payout += num(r.payout)
+  }
+  const cost = calcCostFromItems(reports, products)
+  const periods = reports.map(r => r.period_from + ' — ' + r.period_to)
+  const earliest = reports.reduce((m, r) => r.period_from < m ? r.period_from : m, reports[0].period_from)
+  const latest = reports.reduce((m, r) => r.period_to > m ? r.period_to : m, reports[0].period_to)
+
+  return (
+    <Card>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+        <span style={{ fontSize: 12, fontWeight: 600, color }}>{name}</span>
+        <span style={{ fontSize: 10, color: colors.hint }}>{fmtDate(earliest)} — {fmtDate(latest)}</span>
+      </div>
+      <MiniPL revenue={revenue} logistics={logistics} returns={returns} payout={payout} cost={cost} />
+    </Card>
+  )
+}
+
+function MPTab({ reports, products, color, name }) {
   if (reports.length === 0) return <EmptyState text={`Нет данных по ${name}`} />
 
   return (
@@ -136,6 +220,7 @@ function MPTab({ reports, color, name }) {
         const returns = Math.abs(num(r.returns))
         const payout = num(r.payout)
         const penalties = num(r.penalties)
+        const cost = calcCostFromItems([r], products)
         return (
           <Card key={r.id || i}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
@@ -146,7 +231,7 @@ function MPTab({ reports, color, name }) {
                 {fmtDate(r.loaded_at)}
               </span>
             </div>
-            <MiniPL revenue={revenue} logistics={logistics} returns={returns} payout={payout} penalties={penalties} />
+            <MiniPL revenue={revenue} logistics={logistics} returns={returns} payout={payout} penalties={penalties} cost={cost} />
           </Card>
         )
       })}
@@ -154,7 +239,7 @@ function MPTab({ reports, color, name }) {
   )
 }
 
-function MiniPL({ revenue, logistics, returns, payout, penalties = 0 }) {
+function MiniPL({ revenue, logistics, returns, payout, penalties = 0, cost = 0 }) {
   const rows = [
     { label: 'Выручка', value: revenue, color: PROFIT_COLOR },
     { label: 'Логистика', value: -logistics, color: LOSS_COLOR },
@@ -162,6 +247,7 @@ function MiniPL({ revenue, logistics, returns, payout, penalties = 0 }) {
   ]
   if (penalties > 0) rows.push({ label: 'Штрафы', value: -penalties, color: LOSS_COLOR })
   rows.push({ label: 'К перечислению', value: payout, color: colors.text, bold: true })
+  if (cost > 0) rows.push({ label: 'Себестоимость', value: -cost, color: '#ff9800' })
 
   return (
     <div>
