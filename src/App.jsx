@@ -102,13 +102,19 @@ export default function App() {
       }
     } catch (_) {}
 
+    // tg?.initData is only populated inside real Telegram WebApp
+    const isRealTelegram = tg && tg.initData && tg.initData.length > 0
     const tgUser = tg?.initDataUnsafe?.user
+
     if (tgUser?.id) {
+      // Inside Telegram with user data — auto-login
       setTelegramId(tgUser.id)
-      setAuthState('login')
-    } else if (!tg) {
+      authenticate(tgUser.id)
+    } else if (!isRealTelegram) {
+      // Browser (not Telegram) — dev mode
       setAuthState('dev_prompt')
     } else {
+      // Telegram but no user (edge case)
       setAuthState('login')
     }
   }, [authenticate])
