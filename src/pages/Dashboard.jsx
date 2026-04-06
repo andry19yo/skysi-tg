@@ -30,10 +30,11 @@ function getPeriodDates(period) {
 
 async function fetchWBProfit(dateFrom, dateTo) {
   try {
-    const { data, error } = await supabase.functions.invoke('mp-reports', {
+    const resp = await supabase.functions.invoke('mp-reports', {
       body: { marketplace: 'wb', dateFrom, dateTo },
     })
-    if (error || !data?.ok) return null
+    const data = resp.data
+    if (resp.error || !data?.ok) return null
     const rows = data.data || []
     const sales = rows.filter(r => r.doc_type_name === 'Продажа')
     const returns = rows.filter(r => r.doc_type_name === 'Возврат')
@@ -101,17 +102,19 @@ export default function Dashboard() {
         else if (bal < 0) credit += Math.abs(bal)
       }
 
-      // Sort red zone: products (category contains шампунь or автошампунь) first, then materials
+      // Sort red zone: products first (by qty desc), then materials (by qty desc)
       const allItems = prodRes.data || []
       const isProduct = (p) => {
         const cat = (p.category || '').toLowerCase()
         const name = (p.name || '').toLowerCase()
         return cat.includes('продукц') || cat.includes('товар') ||
           name.includes('автошампунь') || name.includes('шампунь') ||
-          name.includes('воск') || name.includes('детейлер')
+          name.includes('воск') || name.includes('детейлер') || name.includes('eco') ||
+          name.includes('extreme') || name.includes('midline') || name.includes('ручной')
       }
-      const products = allItems.filter(isProduct)
-      const materials = allItems.filter(p => !isProduct(p))
+      const byQtyDesc = (a, b) => Number(b.qty || 0) - Number(a.qty || 0)
+      const products = allItems.filter(isProduct).sort(byQtyDesc)
+      const materials = allItems.filter(p => !isProduct(p)).sort(byQtyDesc)
       const redZone = [...products, ...materials]
 
       setData({

@@ -19,11 +19,19 @@ function getDefaultDates() {
 }
 
 async function fetchMP(marketplace, dateFrom, dateTo) {
-  const { data, error } = await supabase.functions.invoke('mp-reports', {
+  const resp = await supabase.functions.invoke('mp-reports', {
     body: { marketplace, dateFrom, dateTo },
   })
-  if (error) throw new Error(error.message || 'Edge function error')
-  if (!data?.ok) throw new Error(data?.error || 'Unknown error')
+  // supabase-js v2: for non-2xx, error is FunctionsHttpError with context, data may contain the JSON body
+  const data = resp.data
+  const error = resp.error
+  if (error) {
+    // Try to get error detail from response body
+    if (data?.error) throw new Error(data.error)
+    throw new Error(error.message || 'Ошибка Edge Function')
+  }
+  if (data && !data.ok && data.error) throw new Error(data.error)
+  if (!data?.ok) throw new Error('Нет данных от API')
   return data.data || []
 }
 
