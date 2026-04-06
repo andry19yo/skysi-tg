@@ -85,6 +85,16 @@ export default function Contractors() {
   )
 }
 
+const thStyle = {
+  padding: '6px 8px', fontSize: 10, fontWeight: 600,
+  color: colors.hint, textTransform: 'uppercase',
+  letterSpacing: '0.3px', textAlign: 'left', whiteSpace: 'nowrap',
+}
+const tdStyle = {
+  padding: '6px 8px', fontSize: 11, whiteSpace: 'nowrap',
+  color: colors.text,
+}
+
 function ContractorDetail({ contractor, onBack }) {
   const [loading, setLoading] = useState(true)
   const [settlements, setSettlements] = useState([])
@@ -157,31 +167,76 @@ function ContractorDetail({ contractor, onBack }) {
         </div>
       </Card>
 
-      {/* Settlements */}
+      {/* Settlements table */}
       {settlements.length > 0 && (
         <>
           <SectionTitle>Взаиморасчёты</SectionTitle>
-          {settlements.map(s => {
-            const debit = Number(s.debit || 0)
-            const credit = Number(s.credit || 0)
-            const isDebit = debit > 0
-            return (
-              <Card key={s.id}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                  <div>
-                    <div style={{ fontSize: 12 }}>{s.doc_type ? (DOC_TYPE_MAP[s.doc_type] || s.doc_type) : '—'} {s.doc_num || ''}</div>
-                    <div style={{ fontSize: 11, color: colors.hint }}>{fmtDate(s.reg_date)}</div>
-                  </div>
-                  <div style={{
-                    fontSize: 13, fontWeight: 600,
-                    color: isDebit ? '#ff9800' : '#4caf50',
-                  }}>
-                    {isDebit ? `+${fmt(debit)}` : `-${fmt(credit)}`} ₽
-                  </div>
-                </div>
-              </Card>
-            )
-          })}
+          <Card style={{ padding: 0, overflow: 'hidden' }}>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                <thead>
+                  <tr style={{ background: colors.secondaryBg }}>
+                    <th style={thStyle}>Дата</th>
+                    <th style={thStyle}>Документ</th>
+                    <th style={{ ...thStyle, textAlign: 'right' }}>Дебет</th>
+                    <th style={{ ...thStyle, textAlign: 'right' }}>Кредит</th>
+                    <th style={{ ...thStyle, textAlign: 'right' }}>Баланс</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(() => {
+                    // Calculate running balance (settlements are desc, reverse for calc)
+                    const sorted = [...settlements].reverse()
+                    let running = 0
+                    const rows = sorted.map(s => {
+                      const d = Number(s.debit || 0)
+                      const c = Number(s.credit || 0)
+                      running += d - c
+                      return { ...s, _debit: d, _credit: c, _balance: running }
+                    })
+                    rows.reverse() // back to desc
+                    return rows.map(s => (
+                      <tr key={s.id} style={{ borderTop: `1px solid ${colors.border}` }}>
+                        <td style={tdStyle}>{fmtDate(s.reg_date)}</td>
+                        <td style={tdStyle}>
+                          {s.doc_type ? (DOC_TYPE_MAP[s.doc_type] || s.doc_type) : '—'} {s.doc_num || ''}
+                        </td>
+                        <td style={{ ...tdStyle, textAlign: 'right', color: s._debit > 0 ? '#ff9800' : colors.hint }}>
+                          {s._debit > 0 ? fmt(s._debit) : '—'}
+                        </td>
+                        <td style={{ ...tdStyle, textAlign: 'right', color: s._credit > 0 ? '#4caf50' : colors.hint }}>
+                          {s._credit > 0 ? fmt(s._credit) : '—'}
+                        </td>
+                        <td style={{
+                          ...tdStyle, textAlign: 'right', fontWeight: 600,
+                          color: s._balance > 0 ? '#ff9800' : s._balance < 0 ? '#4caf50' : colors.hint,
+                        }}>
+                          {fmt(s._balance)}
+                        </td>
+                      </tr>
+                    ))
+                  })()}
+                </tbody>
+                <tfoot>
+                  <tr style={{ borderTop: `2px solid ${colors.border}`, background: colors.secondaryBg }}>
+                    <td colSpan={2} style={{ ...tdStyle, fontWeight: 600 }}>Итого</td>
+                    <td style={{ ...tdStyle, textAlign: 'right', fontWeight: 600, color: '#ff9800' }}>
+                      {fmt(settlements.reduce((s, r) => s + Number(r.debit || 0), 0))}
+                    </td>
+                    <td style={{ ...tdStyle, textAlign: 'right', fontWeight: 600, color: '#4caf50' }}>
+                      {fmt(settlements.reduce((s, r) => s + Number(r.credit || 0), 0))}
+                    </td>
+                    <td style={{
+                      ...tdStyle, textAlign: 'right', fontWeight: 700,
+                      color: balance > 0 ? '#ff9800' : balance < 0 ? '#4caf50' : colors.hint,
+                    }}>
+                      {fmt(balance)}
+                    </td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </Card>
         </>
       )}
 
