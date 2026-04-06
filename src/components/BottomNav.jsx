@@ -12,7 +12,7 @@ const MAIN_TABS = [
 const MORE_ITEMS = [
   { id: 'warehouse', label: 'Склад',         icon: '📦' },
   { id: 'reports',   label: 'Отчёты',        icon: '📊' },
-  { id: 'orders',    label: 'Заказы МП',     icon: '🛒' },
+  { id: 'mp_reports', label: 'Маркетплейсы', icon: '🛒' },
 ]
 
 export default function BottomNav({ active, onChange }) {

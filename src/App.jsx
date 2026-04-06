@@ -9,18 +9,18 @@ import Dashboard from './pages/Dashboard.jsx'
 import Warehouse from './pages/Warehouse.jsx'
 import Documents from './pages/Documents.jsx'
 import Finance from './pages/Finance.jsx'
-import Orders from './pages/Orders.jsx'
+import MarketplaceReports from './pages/MarketplaceReports.jsx'
 import Contractors from './pages/Contractors.jsx'
 import Reports from './pages/Reports.jsx'
 
 const CACHE_KEY = 'skysi_tg_user'
-const TABS = ['dashboard', 'warehouse', 'documents', 'finance', 'orders', 'contractors', 'reports']
+const TABS = ['dashboard', 'warehouse', 'documents', 'finance', 'mp_reports', 'contractors', 'reports']
 const PAGE_MAP = {
   dashboard: Dashboard,
   warehouse: Warehouse,
   documents: Documents,
   finance: Finance,
-  orders: Orders,
+  mp_reports: MarketplaceReports,
   contractors: Contractors,
   reports: Reports,
 }

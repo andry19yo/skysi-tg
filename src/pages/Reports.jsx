@@ -1,18 +1,12 @@
 import React, { useState, useEffect } from 'react'
 import { supabase } from '../supabase.js'
 import { fmt, fmtDate, colors } from '../utils'
-import { Card, SectionTitle, StatCard, Spinner, ErrorMsg, EmptyState, FilterChips } from '../components/Card.jsx'
+import { Card, MetricCard, SectionTitle, TabBar, FilterChips, Spinner, EmptyState } from '../components/Card.jsx'
 
 const PERIOD_OPTIONS = [
   { value: 'month', label: 'Месяц' },
   { value: 'quarter', label: 'Квартал' },
   { value: 'year', label: 'Год' },
-]
-
-const TAB_OPTIONS = [
-  { value: 'sales', label: 'Продажи' },
-  { value: 'stock', label: 'Остатки' },
-  { value: 'debts', label: 'Долги' },
 ]
 
 function getPeriodDates(period) {
@@ -26,20 +20,23 @@ function getPeriodDates(period) {
   } else {
     from = new Date(now.getFullYear(), now.getMonth(), 1)
   }
-  return {
-    from: from.toISOString().slice(0, 10),
-    to: now.toISOString().slice(0, 10),
-  }
+  return { from: from.toISOString().slice(0, 10), to: now.toISOString().slice(0, 10) }
 }
 
 export default function Reports() {
   const [tab, setTab] = useState('sales')
   const [period, setPeriod] = useState('month')
 
+  const tabs = [
+    { value: 'sales', label: 'Продажи' },
+    { value: 'stock', label: 'Остатки' },
+    { value: 'debts', label: 'Долги' },
+  ]
+
   return (
     <div>
       <SectionTitle>Отчёты</SectionTitle>
-      <FilterChips options={TAB_OPTIONS} value={tab} onChange={setTab} />
+      <TabBar tabs={tabs} value={tab} onChange={setTab} />
       {tab === 'sales' && <SalesReport period={period} onPeriodChange={setPeriod} />}
       {tab === 'stock' && <StockReport />}
       {tab === 'debts' && <DebtsReport />}
@@ -70,6 +67,14 @@ function SalesReport({ period, onPeriodChange }) {
         const revenue = directDocs.reduce((s, d) => s + Number(d.amount || 0), 0)
         const docCount = directDocs.length
 
+        // All docs count for period
+        const { data: allDocs } = await supabase
+          .from('documents')
+          .select('id')
+          .eq('status', 'posted')
+          .gte('doc_date', from)
+          .lte('doc_date', to)
+
         // Top contractors
         const byContractor = {}
         for (const d of directDocs) {
@@ -79,7 +84,6 @@ function SalesReport({ period, onPeriodChange }) {
           byContractor[cid].count++
         }
 
-        // Get contractor names
         const cids = Object.keys(byContractor).filter(id => id !== '0').map(Number)
         let contractorNames = {}
         if (cids.length) {
@@ -92,7 +96,7 @@ function SalesReport({ period, onPeriodChange }) {
           .sort((a, b) => b.total - a.total)
           .slice(0, 5)
 
-        setData({ revenue, docCount, topContractors })
+        setData({ revenue, docCount, allDocsCount: (allDocs || []).length, topContractors })
       } catch (_) {}
       setLoading(false)
     }
@@ -105,8 +109,12 @@ function SalesReport({ period, onPeriodChange }) {
     <div>
       <FilterChips options={PERIOD_OPTIONS} value={period} onChange={onPeriodChange} />
 
-      <StatCard label="Выручка (прямые продажи)" value={fmt(data?.revenue || 0) + ' ₽'} color="#4caf50" />
-      <StatCard label="Документов" value={String(data?.docCount || 0)} color={colors.text} />
+      <MetricCard label="Выручка (прямые продажи)" value={fmt(data?.revenue || 0) + ' ₽'} accent="#10B981" color="#10B981" />
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+        <MetricCard label="Отгрузок" value={String(data?.docCount || 0)} color={colors.text} />
+        <MetricCard label="Всего документов" value={String(data?.allDocsCount || 0)} color={colors.text} />
+      </div>
 
       {data?.topContractors?.length > 0 && (
         <>
@@ -115,10 +123,10 @@ function SalesReport({ period, onPeriodChange }) {
             <Card key={i}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div>
-                  <div style={{ fontSize: 13 }}>{c.name}</div>
-                  <div style={{ fontSize: 11, color: colors.hint }}>{c.count} док.</div>
+                  <div style={{ fontSize: 12 }}>{c.name}</div>
+                  <div style={{ fontSize: 10, color: colors.hint }}>{c.count} док.</div>
                 </div>
-                <div style={{ fontSize: 14, fontWeight: 600, color: '#4caf50' }}>{fmt(c.total)} ₽</div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: '#10B981' }}>{fmt(c.total)} ₽</div>
               </div>
             </Card>
           ))}
@@ -135,11 +143,7 @@ function StockReport() {
   useEffect(() => {
     const load = async () => {
       setLoading(true)
-      const { data } = await supabase
-        .from('products')
-        .select('id, name, qty, cost, unit, category')
-        .order('name')
-
+      const { data } = await supabase.from('products').select('id, name, qty, cost, unit, category').order('name')
       setProducts(data || [])
       setLoading(false)
     }
@@ -149,15 +153,15 @@ function StockReport() {
   if (loading) return <Spinner />
 
   const totalValue = products.reduce((s, p) => s + Number(p.qty || 0) * Number(p.cost || 0), 0)
-  const totalItems = products.reduce((s, p) => s + Number(p.qty || 0), 0)
+  const inStock = products.filter(p => Number(p.qty) > 0).length
   const lowStock = products.filter(p => Number(p.qty) > 0 && Number(p.qty) < 10)
   const outOfStock = products.filter(p => Number(p.qty) <= 0)
 
   return (
     <div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-        <StatCard label="Стоимость склада" value={fmt(totalValue) + ' ₽'} color="#2196f3" />
-        <StatCard label="Позиций на складе" value={String(products.length)} color={colors.text} />
+        <MetricCard label="Стоимость склада" value={fmt(totalValue) + ' ₽'} accent="#2196f3" color="#2196f3" />
+        <MetricCard label="В наличии" value={String(inStock) + ' / ' + products.length} color={colors.text} />
       </div>
 
       {lowStock.length > 0 && (
@@ -166,8 +170,8 @@ function StockReport() {
           {lowStock.map(p => (
             <Card key={p.id}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: 13 }}>{p.name}</span>
-                <span style={{ fontSize: 14, fontWeight: 600, color: '#ff9800' }}>
+                <span style={{ fontSize: 12 }}>{p.name}</span>
+                <span style={{ fontSize: 13, fontWeight: 600, color: '#ff9800' }}>
                   {p.qty} {p.unit || 'шт'}
                 </span>
               </div>
@@ -181,7 +185,7 @@ function StockReport() {
           <SectionTitle>Нет в наличии</SectionTitle>
           {outOfStock.map(p => (
             <Card key={p.id}>
-              <div style={{ fontSize: 13, color: '#f44336' }}>{p.name}</div>
+              <div style={{ fontSize: 12, color: '#EF4444' }}>{p.name}</div>
             </Card>
           ))}
         </>
@@ -200,9 +204,7 @@ function DebtsReport() {
       setLoading(true)
       try {
         const { data: contractors } = await supabase
-          .from('contractors')
-          .select('id, name, balance')
-          .order('name')
+          .from('contractors').select('id, name, balance').order('name')
 
         const deb = [], cred = []
         for (const c of (contractors || [])) {
@@ -228,8 +230,8 @@ function DebtsReport() {
   return (
     <div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-        <StatCard label="Нам должны" value={fmt(totalDebt) + ' ₽'} color="#ff9800" />
-        <StatCard label="Мы должны" value={fmt(totalCredit) + ' ₽'} color="#f44336" />
+        <MetricCard label="Нам должны" value={fmt(totalDebt) + ' ₽'} accent="#ff9800" color="#ff9800" />
+        <MetricCard label="Мы должны" value={fmt(totalCredit) + ' ₽'} accent="#EF4444" color="#EF4444" />
       </div>
 
       {debtors.length > 0 && (
@@ -238,8 +240,8 @@ function DebtsReport() {
           {debtors.map(d => (
             <Card key={d.id}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: 13 }}>{d.name}</span>
-                <span style={{ fontSize: 14, fontWeight: 600, color: '#ff9800' }}>{fmt(d.balance)} ₽</span>
+                <span style={{ fontSize: 12 }}>{d.name}</span>
+                <span style={{ fontSize: 13, fontWeight: 600, color: '#ff9800' }}>{fmt(d.balance)} ₽</span>
               </div>
             </Card>
           ))}
@@ -252,8 +254,8 @@ function DebtsReport() {
           {creditors.map(c => (
             <Card key={c.id}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: 13 }}>{c.name}</span>
-                <span style={{ fontSize: 14, fontWeight: 600, color: '#f44336' }}>{fmt(c.balance)} ₽</span>
+                <span style={{ fontSize: 12 }}>{c.name}</span>
+                <span style={{ fontSize: 13, fontWeight: 600, color: '#EF4444' }}>{fmt(c.balance)} ₽</span>
               </div>
             </Card>
           ))}
