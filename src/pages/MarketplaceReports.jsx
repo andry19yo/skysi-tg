@@ -7,6 +7,7 @@ const WB_COLOR = '#CB11AB'
 const OZON_COLOR = '#005BFF'
 const PROFIT_COLOR = '#10B981'
 const LOSS_COLOR = '#EF4444'
+const TAX_RATE = 0.06
 
 function getDefaultDates() {
   const now = new Date()
@@ -17,33 +18,118 @@ function getDefaultDates() {
   }
 }
 
+async function fetchMP(marketplace, dateFrom, dateTo) {
+  const { data, error } = await supabase.functions.invoke('mp-reports', {
+    body: { marketplace, dateFrom, dateTo },
+  })
+  if (error) throw new Error(error.message || 'Edge function error')
+  if (!data?.ok) throw new Error(data?.error || 'Unknown error')
+  return data.data || []
+}
+
+// Aggregate WB detailed report rows into P&L
+function aggregateWB(rows) {
+  const sales = rows.filter(r => r.doc_type_name === 'Продажа')
+  const returns = rows.filter(r => r.doc_type_name === 'Возврат')
+
+  const totalForPay = sales.reduce((s, r) => s + (Number(r.ppvz_for_pay) || 0), 0)
+  const totalLogist = rows.reduce((s, r) => s + (Number(r.delivery_rub) || 0), 0)
+  const totalStorage = rows.reduce((s, r) => s + (Number(r.storage_fee) || 0), 0)
+  const totalPenalty = rows.reduce((s, r) => s + (Number(r.penalty) || 0), 0)
+  const returnForPay = returns.reduce((s, r) => s + Math.abs(Number(r.ppvz_for_pay) || 0), 0)
+  const totalCost = sales.reduce((s, r) => s + ((Number(r.quantity) || 0) * (Number(r._cost) || 0)), 0)
+  const salesQty = sales.reduce((s, r) => s + (Number(r.quantity) || 0), 0)
+
+  const grossPay = totalForPay - returnForPay - totalLogist - totalStorage - totalPenalty
+  const tax = Math.round(totalForPay * TAX_RATE)
+  const profit = grossPay - totalCost - tax
+  const margin = totalForPay ? Math.round(profit / totalForPay * 1000) / 10 : 0
+
+  // By month
+  const byMonth = {}
+  for (const r of rows) {
+    const d = (r.rr_dt || r.date_from || '').slice(0, 7)
+    if (!d) continue
+    if (!byMonth[d]) byMonth[d] = { forPay: 0, logist: 0, storage: 0, cost: 0, qty: 0, returnPay: 0, penalty: 0 }
+    const m = byMonth[d]
+    if (r.doc_type_name === 'Продажа') {
+      m.forPay += Number(r.ppvz_for_pay) || 0
+      m.cost += (Number(r.quantity) || 0) * (Number(r._cost) || 0)
+      m.qty += Number(r.quantity) || 0
+    }
+    if (r.doc_type_name === 'Возврат') m.returnPay += Math.abs(Number(r.ppvz_for_pay) || 0)
+    m.logist += Number(r.delivery_rub) || 0
+    m.storage += Number(r.storage_fee) || 0
+    m.penalty += Number(r.penalty) || 0
+  }
+  const monthly = Object.entries(byMonth).sort((a, b) => a[0].localeCompare(b[0])).map(([month, m]) => {
+    const gross = m.forPay - m.returnPay - m.logist - m.storage - m.penalty
+    const tx = Math.round(m.forPay * TAX_RATE)
+    const prof = gross - m.cost - tx
+    const mg = m.forPay ? Math.round(prof / m.forPay * 1000) / 10 : 0
+    return { month, ...m, gross, tax: tx, profit: prof, margin: mg }
+  })
+
+  // Top articles
+  const byArt = {}
+  for (const r of sales) {
+    const key = r.sa_name || r.supplierArticle || String(r.nm_id) || '—'
+    if (!byArt[key]) byArt[key] = { article: key, product: r._product || '', forPay: 0, cost: 0, qty: 0 }
+    const a = byArt[key]
+    a.forPay += Number(r.ppvz_for_pay) || 0
+    a.cost += (Number(r.quantity) || 0) * (Number(r._cost) || 0)
+    a.qty += Number(r.quantity) || 0
+  }
+  const articles = Object.values(byArt).sort((a, b) => b.forPay - a.forPay).map(a => {
+    const tx = Math.round(a.forPay * TAX_RATE)
+    const prof = a.forPay - a.cost - tx
+    return { ...a, tax: tx, profit: prof, margin: a.forPay ? Math.round(prof / a.forPay * 100) : 0 }
+  })
+
+  return {
+    totalForPay, totalLogist, totalStorage, totalPenalty, returnForPay, totalCost,
+    grossPay, tax, profit, margin, salesQty, monthly, articles,
+  }
+}
+
+// Aggregate Ozon operations
+function aggregateOzon(operations) {
+  let revenue = 0, commission = 0, logistics = 0, returns = 0, other = 0
+  for (const op of operations) {
+    const services = op.services || []
+    const items = op.items || []
+    const amount = Number(op.amount) || 0
+
+    if (op.operation_type === 'OperationAgentDeliveredToCustomer') {
+      revenue += amount
+    } else if (op.operation_type === 'OperationReturnGoodsFBSofRMS' || (op.operation_type || '').includes('Return')) {
+      returns += Math.abs(amount)
+    }
+
+    for (const svc of services) {
+      const sAmount = Number(svc.price) || 0
+      if ((svc.name || '').includes('логист') || (svc.name || '').includes('Логист')) {
+        logistics += Math.abs(sAmount)
+      } else if ((svc.name || '').includes('комисс') || (svc.name || '').includes('Комисс')) {
+        commission += Math.abs(sAmount)
+      }
+    }
+  }
+
+  const payout = revenue - commission - logistics - returns
+  const tax = Math.round(revenue * TAX_RATE)
+  const profit = payout - tax
+
+  return { revenue, commission, logistics, returns, payout, tax, profit, opCount: operations.length }
+}
+
 export default function MarketplaceReports() {
-  const [loading, setLoading] = useState(true)
-  const [reports, setReports] = useState([])
-  const [products, setProducts] = useState([])
-  const [tab, setTab] = useState('summary')
+  const [tab, setTab] = useState('wb')
   const { dateFrom: defFrom, dateTo: defTo } = getDefaultDates()
   const [dateFrom, setDateFrom] = useState(defFrom)
   const [dateTo, setDateTo] = useState(defTo)
 
-  useEffect(() => {
-    const load = async () => {
-      setLoading(true)
-      const [repRes, prodRes] = await Promise.all([
-        supabase.from('marketplace_reports').select('*')
-          .gte('period_from', dateFrom).lte('period_to', dateTo)
-          .order('period_from', { ascending: false }),
-        supabase.from('products').select('id, name, cost'),
-      ])
-      setReports(repRes.data || [])
-      setProducts(prodRes.data || [])
-      setLoading(false)
-    }
-    load()
-  }, [dateFrom, dateTo])
-
   const tabs = [
-    { value: 'summary', label: 'Сводка', color: PROFIT_COLOR },
     { value: 'wb', label: 'WB', color: WB_COLOR },
     { value: 'ozon', label: 'Ozon', color: OZON_COLOR },
   ]
@@ -67,201 +153,202 @@ export default function MarketplaceReports() {
 
       <TabBar tabs={tabs} value={tab} onChange={setTab} />
 
-      {loading ? <Spinner /> : (
+      {tab === 'wb' && <WBTab dateFrom={dateFrom} dateTo={dateTo} />}
+      {tab === 'ozon' && <OzonTab dateFrom={dateFrom} dateTo={dateTo} />}
+    </div>
+  )
+}
+
+function WBTab({ dateFrom, dateTo }) {
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
+  const [data, setData] = useState(null)
+
+  const load = async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const rows = await fetchMP('wb', dateFrom, dateTo)
+      setData(aggregateWB(rows))
+    } catch (e) {
+      setError(e.message)
+    }
+    setLoading(false)
+  }
+
+  useEffect(() => { load() }, [dateFrom, dateTo])
+
+  if (loading) return <Spinner />
+  if (error) return (
+    <Card>
+      <div style={{ fontSize: 12, color: LOSS_COLOR }}>{error}</div>
+      <div onClick={load} style={{ fontSize: 11, color: colors.button, marginTop: 8, cursor: 'pointer' }}>Повторить</div>
+    </Card>
+  )
+  if (!data) return <EmptyState text="Нажмите загрузить" />
+
+  return (
+    <div>
+      {/* Metrics */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+        <MetricCard label="К перечислению" value={fmt(data.totalForPay) + ' ₽'} accent={PROFIT_COLOR} color={PROFIT_COLOR} />
+        <MetricCard label="Выкуплено" value={data.salesQty + ' шт'} accent={PROFIT_COLOR} color={colors.text} />
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+        <MetricCard label="Логист.+хран." value={fmt(data.totalLogist + data.totalStorage) + ' ₽'} accent={LOSS_COLOR} color={LOSS_COLOR} />
+        <MetricCard
+          label="Чистая прибыль"
+          value={fmt(data.profit) + ' ₽'}
+          accent={data.profit >= 0 ? PROFIT_COLOR : LOSS_COLOR}
+          color={data.profit >= 0 ? PROFIT_COLOR : LOSS_COLOR}
+          sub={`маржа ${data.margin}%`}
+        />
+      </div>
+
+      {/* P&L */}
+      <SectionTitle>Структура P&L</SectionTitle>
+      <Card>
+        <PLRow label="(+) К перечислению за товар" value={data.totalForPay} color={PROFIT_COLOR} bold />
+        <PLRow label="(−) Возвраты" value={-data.returnForPay} color={LOSS_COLOR} />
+        <PLRow label="(−) Логистика WB" value={-data.totalLogist} color={LOSS_COLOR} />
+        <PLRow label="(−) Хранение WB" value={-data.totalStorage} color={LOSS_COLOR} />
+        <PLRow label="(−) Штрафы" value={-data.totalPenalty} color={LOSS_COLOR} />
+        <PLSep />
+        <PLRow label="Итого к перечислению (факт)" value={data.grossPay} color={colors.text} bold />
+        <PLRow label="(−) Себестоимость" value={-data.totalCost} color="#ff9800" />
+        <PLRow label="(−) Налог УСН 6%" value={-data.tax} color="#ff9800" />
+        <PLSep />
+        <PLRow label="ЧИСТАЯ ПРИБЫЛЬ" value={data.profit} color={data.profit >= 0 ? PROFIT_COLOR : LOSS_COLOR} bold big />
+        {data.margin !== 0 && (
+          <div style={{ fontSize: 10, color: colors.hint, textAlign: 'right', marginTop: 2 }}>маржа {data.margin}%</div>
+        )}
+      </Card>
+
+      {/* Monthly */}
+      {data.monthly.length > 0 && (
         <>
-          {tab === 'summary' && <SummaryTab reports={reports} products={products} />}
-          {tab === 'wb' && <MPTab reports={reports.filter(r => r.marketplace === 'wb')} products={products} color={WB_COLOR} name="Wildberries" />}
-          {tab === 'ozon' && <MPTab reports={reports.filter(r => r.marketplace === 'ozon')} products={products} color={OZON_COLOR} name="Ozon" />}
+          <SectionTitle>По месяцам</SectionTitle>
+          {data.monthly.map((m, i) => (
+            <Card key={i}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                <span style={{ fontSize: 12, fontWeight: 600, color: WB_COLOR }}>{m.month}</span>
+                <span style={{
+                  fontSize: 12, fontWeight: 600,
+                  color: m.profit >= 0 ? PROFIT_COLOR : LOSS_COLOR,
+                }}>{fmt(m.profit)} ₽</span>
+              </div>
+              <MiniPL
+                rows={[
+                  { label: 'К перечислению', value: m.forPay, color: PROFIT_COLOR },
+                  { label: 'Логист.+хран.', value: -(m.logist + m.storage), color: LOSS_COLOR },
+                  { label: 'Возвраты', value: -m.returnPay, color: LOSS_COLOR },
+                  { label: 'Себестоимость', value: -m.cost, color: '#ff9800' },
+                  { label: 'Налог 6%', value: -m.tax, color: '#ff9800' },
+                  { label: 'Прибыль', value: m.profit, color: m.profit >= 0 ? PROFIT_COLOR : LOSS_COLOR, bold: true },
+                ]}
+              />
+            </Card>
+          ))}
+        </>
+      )}
+
+      {/* Top articles */}
+      {data.articles.length > 0 && (
+        <>
+          <SectionTitle>По артикулам</SectionTitle>
+          {data.articles.slice(0, 10).map((a, i) => (
+            <Card key={i}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: colors.text }}>{a.product || a.article}</div>
+                  {a.product && <div style={{ fontSize: 10, color: colors.hint }}>{a.article}</div>}
+                </div>
+                <span style={{ fontSize: 12, fontWeight: 600, color: a.profit >= 0 ? PROFIT_COLOR : LOSS_COLOR }}>
+                  {fmt(a.profit)} ₽
+                </span>
+              </div>
+              <div style={{ display: 'flex', gap: 12, fontSize: 10, color: colors.hint }}>
+                <span>{a.qty} шт</span>
+                <span>выр. {fmt(a.forPay)} ₽</span>
+                <span>маржа {a.margin}%</span>
+              </div>
+            </Card>
+          ))}
         </>
       )}
     </div>
   )
 }
 
-// Match MP item name to product cost
-function findCost(itemName, products) {
-  if (!itemName) return 0
-  const n = itemName.toLowerCase()
+function OzonTab({ dateFrom, dateTo }) {
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
+  const [data, setData] = useState(null)
 
-  // Extract volume
-  let volume = ''
-  const volMatch = n.match(/(\d+)\s*л/)
-  if (volMatch) volume = volMatch[1] + 'л'
-
-  // Detect brand
-  let brand = ''
-  if (n.includes('ext')) brand = 'Extreme'
-  else if (n.includes('midline') || n.includes('worker')) brand = 'Midline'
-  else if (n.includes('eco') || n.includes('newius')) brand = 'Eco'
-
-  if (!brand) return 0
-
-  // Try to match product
-  for (const p of products) {
-    const pn = p.name.toLowerCase()
-    if (pn.includes(brand.toLowerCase()) && volume && pn.includes(volume)) {
-      return Number(p.cost || 0)
+  const load = async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const ops = await fetchMP('ozon', dateFrom, dateTo)
+      setData(aggregateOzon(ops))
+    } catch (e) {
+      setError(e.message)
     }
-  }
-  return 0
-}
-
-function calcCostFromItems(reports, products) {
-  let totalCost = 0
-  for (const r of reports) {
-    if (!r.items) continue
-    const items = typeof r.items === 'string' ? JSON.parse(r.items) : r.items
-    for (const it of items) {
-      const cost = findCost(it.name, products)
-      const qty = Number(it.qty_sold || 0) - Number(it.qty_returned || 0)
-      totalCost += cost * qty
-    }
-  }
-  return totalCost
-}
-
-function SummaryTab({ reports, products }) {
-  if (reports.length === 0) return <EmptyState text="Нет данных за выбранный период" />
-
-  // Aggregate all reports in period
-  let totalRevenue = 0, totalLogistics = 0, totalReturns = 0, totalPenalties = 0, totalPayout = 0
-  for (const r of reports) {
-    totalRevenue += num(r.revenue)
-    totalLogistics += num(r.logistics)
-    totalReturns += Math.abs(num(r.returns))
-    totalPenalties += num(r.penalties)
-    totalPayout += num(r.payout)
+    setLoading(false)
   }
 
-  const totalCost = calcCostFromItems(reports, products)
-  const tax = totalPayout * 0.06
-  const profit = totalPayout - totalCost - tax
+  useEffect(() => { load() }, [dateFrom, dateTo])
 
-  return (
-    <div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-        <MetricCard label="Выручка" value={fmt(totalRevenue) + ' ₽'} accent={PROFIT_COLOR} color={PROFIT_COLOR} />
-        <MetricCard label="К перечислению" value={fmt(totalPayout) + ' ₽'} accent={PROFIT_COLOR} color={PROFIT_COLOR} />
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-        <MetricCard label="Себестоимость" value={fmt(totalCost) + ' ₽'} accent="#ff9800" color="#ff9800" />
-        <MetricCard label="Логистика" value={fmt(totalLogistics) + ' ₽'} accent={LOSS_COLOR} color={LOSS_COLOR} />
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-        <MetricCard label="Налог 6%" value={fmt(tax) + ' ₽'} accent="#ff9800" color="#ff9800" />
-        <MetricCard
-          label="Чистая прибыль"
-          value={fmt(profit) + ' ₽'}
-          accent={profit >= 0 ? PROFIT_COLOR : LOSS_COLOR}
-          color={profit >= 0 ? PROFIT_COLOR : LOSS_COLOR}
-          sub={totalPayout > 0 ? `Маржа: ${(profit / totalPayout * 100).toFixed(1)}%` : ''}
-        />
-      </div>
-
-      {/* P&L breakdown */}
-      <SectionTitle>P&L структура</SectionTitle>
-      <Card>
-        <PLRow label="Выручка" value={totalRevenue} color={PROFIT_COLOR} bold />
-        <PLRow label="  Возвраты" value={-totalReturns} color={LOSS_COLOR} />
-        <PLRow label="  Логистика" value={-totalLogistics} color={LOSS_COLOR} />
-        <PLRow label="  Штрафы" value={-totalPenalties} color={LOSS_COLOR} />
-        <PLSep />
-        <PLRow label="К перечислению" value={totalPayout} color={colors.text} bold />
-        <PLRow label="  Себестоимость" value={-totalCost} color="#ff9800" />
-        <PLRow label="  Налог УСН 6%" value={-tax} color="#ff9800" />
-        <PLSep />
-        <PLRow label="Чистая прибыль" value={profit} color={profit >= 0 ? PROFIT_COLOR : LOSS_COLOR} bold big />
-      </Card>
-
-      {/* Per-marketplace */}
-      <SectionTitle>По площадкам</SectionTitle>
-      {renderMPSummary(reports.filter(r => r.marketplace === 'wb'), products, 'Wildberries', WB_COLOR)}
-      {renderMPSummary(reports.filter(r => r.marketplace === 'ozon'), products, 'Ozon', OZON_COLOR)}
-    </div>
-  )
-}
-
-function renderMPSummary(reports, products, name, color) {
-  if (reports.length === 0) return null
-  let revenue = 0, logistics = 0, returns = 0, payout = 0
-  for (const r of reports) {
-    revenue += num(r.revenue)
-    logistics += num(r.logistics)
-    returns += Math.abs(num(r.returns))
-    payout += num(r.payout)
-  }
-  const cost = calcCostFromItems(reports, products)
-  const periods = reports.map(r => r.period_from + ' — ' + r.period_to)
-  const earliest = reports.reduce((m, r) => r.period_from < m ? r.period_from : m, reports[0].period_from)
-  const latest = reports.reduce((m, r) => r.period_to > m ? r.period_to : m, reports[0].period_to)
-
-  return (
+  if (loading) return <Spinner />
+  if (error) return (
     <Card>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-        <span style={{ fontSize: 12, fontWeight: 600, color }}>{name}</span>
-        <span style={{ fontSize: 10, color: colors.hint }}>{fmtDate(earliest)} — {fmtDate(latest)}</span>
-      </div>
-      <MiniPL revenue={revenue} logistics={logistics} returns={returns} payout={payout} cost={cost} />
+      <div style={{ fontSize: 12, color: LOSS_COLOR }}>{error}</div>
+      <div onClick={load} style={{ fontSize: 11, color: colors.button, marginTop: 8, cursor: 'pointer' }}>Повторить</div>
     </Card>
   )
-}
-
-function MPTab({ reports, products, color, name }) {
-  if (reports.length === 0) return <EmptyState text={`Нет данных по ${name}`} />
+  if (!data) return <EmptyState text="Нет данных" />
 
   return (
     <div>
-      <SectionTitle>{name} — отчёты</SectionTitle>
-      {reports.map((r, i) => {
-        const revenue = num(r.revenue)
-        const logistics = num(r.logistics)
-        const returns = Math.abs(num(r.returns))
-        const payout = num(r.payout)
-        const penalties = num(r.penalties)
-        const cost = calcCostFromItems([r], products)
-        return (
-          <Card key={r.id || i}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <span style={{ fontSize: 11, fontWeight: 600, color }}>
-                {fmtDate(r.period_from)} — {fmtDate(r.period_to)}
-              </span>
-              <span style={{ fontSize: 10, color: colors.hint }}>
-                {fmtDate(r.loaded_at)}
-              </span>
-            </div>
-            <MiniPL revenue={revenue} logistics={logistics} returns={returns} payout={payout} penalties={penalties} cost={cost} />
-          </Card>
-        )
-      })}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+        <MetricCard label="Выручка" value={fmt(data.revenue) + ' ₽'} accent={PROFIT_COLOR} color={PROFIT_COLOR} />
+        <MetricCard label="К перечислению" value={fmt(data.payout) + ' ₽'} accent={OZON_COLOR} color={OZON_COLOR} />
+      </div>
+
+      <SectionTitle>P&L Ozon</SectionTitle>
+      <Card>
+        <PLRow label="Выручка" value={data.revenue} color={PROFIT_COLOR} bold />
+        <PLRow label="(−) Комиссия" value={-data.commission} color={LOSS_COLOR} />
+        <PLRow label="(−) Логистика" value={-data.logistics} color={LOSS_COLOR} />
+        <PLRow label="(−) Возвраты" value={-data.returns} color={LOSS_COLOR} />
+        <PLSep />
+        <PLRow label="К перечислению" value={data.payout} color={colors.text} bold />
+        <PLRow label="(−) Налог УСН 6%" value={-data.tax} color="#ff9800" />
+        <PLSep />
+        <PLRow label="Прибыль" value={data.profit} color={data.profit >= 0 ? PROFIT_COLOR : LOSS_COLOR} bold big />
+      </Card>
+
+      <div style={{ fontSize: 10, color: colors.hint, marginTop: 8, textAlign: 'center' }}>
+        Операций: {data.opCount}
+      </div>
     </div>
   )
 }
 
-function MiniPL({ revenue, logistics, returns, payout, penalties = 0, cost = 0 }) {
-  const rows = [
-    { label: 'Выручка', value: revenue, color: PROFIT_COLOR },
-    { label: 'Логистика', value: -logistics, color: LOSS_COLOR },
-    { label: 'Возвраты', value: -returns, color: LOSS_COLOR },
-  ]
-  if (penalties > 0) rows.push({ label: 'Штрафы', value: -penalties, color: LOSS_COLOR })
-  rows.push({ label: 'К перечислению', value: payout, color: colors.text, bold: true })
-  if (cost > 0) rows.push({ label: 'Себестоимость', value: -cost, color: '#ff9800' })
-
+function MiniPL({ rows }) {
   return (
     <div>
       {rows.map((r, i) => (
         <div key={i} style={{
           display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-          padding: '3px 0', fontSize: 12,
+          padding: '3px 0', fontSize: 11,
           fontWeight: r.bold ? 600 : 400,
           borderTop: r.bold ? `1px solid ${colors.border}` : 'none',
           marginTop: r.bold ? 4 : 0, paddingTop: r.bold ? 6 : 3,
         }}>
           <span style={{ color: colors.hint }}>{r.label}</span>
           <span style={{ color: r.color, fontWeight: r.bold ? 600 : 500 }}>
-            {r.value >= 0 ? '' : '−'}{fmt(Math.abs(r.value))} ₽
+            {r.value < 0 ? '−' : ''}{fmt(Math.abs(r.value))} ₽
           </span>
         </div>
       ))}
@@ -274,12 +361,12 @@ function PLRow({ label, value, color, bold, big }) {
     <div style={{
       display: 'flex', justifyContent: 'space-between', alignItems: 'center',
       padding: '4px 0',
-      fontSize: big ? 15 : 12,
+      fontSize: big ? 14 : 12,
       fontWeight: bold ? 600 : 400,
     }}>
       <span style={{ color: bold ? colors.text : colors.hint }}>{label}</span>
       <span style={{ color, fontWeight: bold ? 700 : 500 }}>
-        {value >= 0 ? '' : '−'}{fmt(Math.abs(value))} ₽
+        {value < 0 ? '−' : ''}{fmt(Math.abs(value))} ₽
       </span>
     </div>
   )
@@ -288,5 +375,3 @@ function PLRow({ label, value, color, bold, big }) {
 function PLSep() {
   return <div style={{ borderTop: `1px solid ${colors.border}`, margin: '4px 0' }} />
 }
-
-function num(v) { return Number(v || 0) }
