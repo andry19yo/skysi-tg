@@ -4,20 +4,25 @@ import { tg, colors } from './utils'
 import BottomNav from './components/BottomNav.jsx'
 import AccessDenied from './components/AccessDenied.jsx'
 import { Spinner } from './components/Card.jsx'
+import { ToastContainer } from './components/Toast.jsx'
 import Dashboard from './pages/Dashboard.jsx'
 import Warehouse from './pages/Warehouse.jsx'
 import Documents from './pages/Documents.jsx'
 import Finance from './pages/Finance.jsx'
 import Orders from './pages/Orders.jsx'
+import Contractors from './pages/Contractors.jsx'
+import Reports from './pages/Reports.jsx'
 
 const CACHE_KEY = 'skysi_tg_user'
-const TABS = ['dashboard', 'warehouse', 'documents', 'finance', 'orders']
+const TABS = ['dashboard', 'warehouse', 'documents', 'finance', 'orders', 'contractors', 'reports']
 const PAGE_MAP = {
   dashboard: Dashboard,
   warehouse: Warehouse,
   documents: Documents,
   finance: Finance,
   orders: Orders,
+  contractors: Contractors,
+  reports: Reports,
 }
 
 function copyText(text) {
@@ -69,13 +74,11 @@ export default function App() {
     }
 
     if (!data.is_active) {
-      // If cached user was deactivated — clear cache and block
       localStorage.removeItem(CACHE_KEY)
       setAuthState('blocked')
       return
     }
 
-    // Save to cache
     localStorage.setItem(CACHE_KEY, JSON.stringify({
       telegram_id: data.telegram_id,
       role: data.role,
@@ -87,7 +90,6 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    // 1. Try localStorage cache first
     try {
       const raw = localStorage.getItem(CACHE_KEY)
       if (raw) {
@@ -95,22 +97,18 @@ export default function App() {
         setUser(cached)
         setTelegramId(cached.telegram_id)
         setAuthState('ok')
-        // Verify in background (deactivation check)
         authenticate(cached.telegram_id, true)
         return
       }
     } catch (_) {}
 
-    // 2. No cache — get Telegram user
     const tgUser = tg?.initDataUnsafe?.user
     if (tgUser?.id) {
       setTelegramId(tgUser.id)
       setAuthState('login')
     } else if (!tg) {
-      // Dev mode — no Telegram context
       setAuthState('dev_prompt')
     } else {
-      // Telegram context present but no user
       setAuthState('login')
     }
   }, [authenticate])
@@ -163,6 +161,7 @@ export default function App() {
   if (authState === 'loading') {
     return (
       <div style={{ background: colors.bg, minHeight: '100vh', fontFamily: "'IBM Plex Mono', monospace" }}>
+        <ToastContainer />
         <Spinner />
       </div>
     )
@@ -172,6 +171,7 @@ export default function App() {
   if (authState === 'dev_prompt') {
     return (
       <div style={pageWrap}>
+        <ToastContainer />
         <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: 2, marginBottom: 4 }}>SKYSI</div>
         <div style={{ fontSize: 11, color: colors.hint, marginBottom: 32, letterSpacing: 1 }}>
           Dev Mode
@@ -218,6 +218,7 @@ export default function App() {
     const isChecking = authState === 'checking'
     return (
       <div style={pageWrap}>
+        <ToastContainer />
         <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: 2, marginBottom: 4 }}>SKYSI</div>
         <div style={{ fontSize: 11, color: colors.hint, marginBottom: 40, letterSpacing: 1 }}>
           управление бизнесом
@@ -284,6 +285,8 @@ export default function App() {
       background: colors.bg, color: colors.text,
       fontFamily: "'IBM Plex Mono', monospace",
     }}>
+      <ToastContainer />
+
       {/* Header */}
       <div style={{
         padding: '10px 16px',

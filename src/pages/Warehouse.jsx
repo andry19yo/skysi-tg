@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { supabase } from '../supabase.js'
 import { fmtInt, fmt, colors } from '../utils'
-import { Card, SectionTitle, Spinner, ErrorMsg, EmptyState, SearchInput, FilterChips } from '../components/Card.jsx'
+import { Card, SectionTitle, StatCard, Spinner, ErrorMsg, EmptyState, SearchInput, FilterChips } from '../components/Card.jsx'
 
 const CATEGORIES = [
   { value: 'all', label: 'Все' },
@@ -14,6 +14,7 @@ const CATEGORIES = [
 const SORTS = [
   { value: 'name', label: 'По имени' },
   { value: 'qty', label: 'По остатку' },
+  { value: 'value', label: 'По стоимости' },
 ]
 
 export default function Warehouse() {
@@ -30,7 +31,7 @@ export default function Warehouse() {
     try {
       const { data, error: err } = await supabase
         .from('products')
-        .select('id, name, category, qty, unit, cost')
+        .select('id, name, category, qty, unit, cost, price')
         .order('name')
 
       if (err) throw err
@@ -57,12 +58,24 @@ export default function Warehouse() {
 
   if (sort === 'qty') {
     filtered = [...filtered].sort((a, b) => (a.qty || 0) - (b.qty || 0))
+  } else if (sort === 'value') {
+    filtered = [...filtered].sort((a, b) =>
+      (Number(b.qty || 0) * Number(b.cost || 0)) - (Number(a.qty || 0) * Number(a.cost || 0))
+    )
   } else {
     filtered = [...filtered].sort((a, b) => (a.name || '').localeCompare(b.name || '', 'ru'))
   }
 
+  const totalValue = products.reduce((s, p) => s + Number(p.qty || 0) * Number(p.cost || 0), 0)
+  const totalPositions = products.filter(p => Number(p.qty) > 0).length
+
   return (
     <div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 4 }}>
+        <StatCard label="Стоимость склада" value={fmt(totalValue) + ' ₽'} color="#2196f3" />
+        <StatCard label="Позиций в наличии" value={String(totalPositions)} color={colors.text} />
+      </div>
+
       <SectionTitle>Склад ({filtered.length})</SectionTitle>
       <SearchInput value={search} onChange={setSearch} placeholder="Поиск товара..." />
       <FilterChips options={CATEGORIES} value={category} onChange={setCategory} />
@@ -90,7 +103,10 @@ export default function Warehouse() {
         <EmptyState text="Товары не найдены" />
       ) : (
         filtered.map(p => {
-          const isLow = (p.qty || 0) < 20
+          const qty = Number(p.qty || 0)
+          const isLow = qty > 0 && qty < 20
+          const isOut = qty <= 0
+          const stockValue = qty * Number(p.cost || 0)
           return (
             <Card key={p.id}>
               <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>{p.name}</div>
@@ -101,16 +117,15 @@ export default function Warehouse() {
                 <span style={{
                   fontSize: 15,
                   fontWeight: 600,
-                  color: isLow ? '#f44336' : colors.text,
+                  color: isOut ? '#f44336' : isLow ? '#ff9800' : colors.text,
                 }}>
-                  {fmtInt(p.qty)}
+                  {fmtInt(qty)}
                 </span>
               </div>
-              {p.cost != null && (
-                <div style={{ fontSize: 11, color: colors.hint, marginTop: 2 }}>
-                  Себест.: {fmt(p.cost)} ₽
-                </div>
-              )}
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: colors.hint, marginTop: 2 }}>
+                <span>Себест.: {fmt(p.cost || 0)} ₽</span>
+                {stockValue > 0 && <span>Сумма: {fmt(stockValue)} ₽</span>}
+              </div>
             </Card>
           )
         })

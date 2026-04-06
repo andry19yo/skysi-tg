@@ -4,12 +4,14 @@ import { fmt, fmtDate, DOC_TYPE_MAP, DOC_TYPE_COLORS, DOC_STATUS_MAP, STATUS_COL
 import { Card, SectionTitle, Spinner, ErrorMsg, EmptyState, SearchInput, FilterChips } from '../components/Card.jsx'
 import { Badge } from '../components/Badge.jsx'
 import DocDetail from '../components/DocDetail.jsx'
+import { toast } from '../components/Toast.jsx'
 
 const TYPE_OPTIONS = [
   { value: 'all', label: 'Все' },
   { value: 'receipt', label: 'Приходная' },
   { value: 'invoice', label: 'Счёт' },
   { value: 'torg12', label: 'ТОРГ-12' },
+  { value: 'ttn', label: 'ТТН' },
   { value: 'payment', label: 'Оплата' },
   { value: 'return', label: 'Возврат' },
 ]
@@ -26,6 +28,15 @@ const ACCOUNTING_OPTIONS = [
   { value: 'internal', label: 'Внутр.' },
 ]
 
+function getDefaultDates() {
+  const now = new Date()
+  const from = new Date(now.getFullYear(), now.getMonth(), 1)
+  return {
+    dateFrom: from.toISOString().slice(0, 10),
+    dateTo: now.toISOString().slice(0, 10),
+  }
+}
+
 export default function Documents() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -35,6 +46,9 @@ export default function Documents() {
   const [accFilter, setAccFilter] = useState('all')
   const [selectedDoc, setSelectedDoc] = useState(null)
   const [showCreate, setShowCreate] = useState(false)
+  const { dateFrom: defFrom, dateTo: defTo } = getDefaultDates()
+  const [dateFrom, setDateFrom] = useState(defFrom)
+  const [dateTo, setDateTo] = useState(defTo)
 
   const load = async () => {
     setLoading(true)
@@ -44,7 +58,9 @@ export default function Documents() {
         .from('documents')
         .select('id, num, doc_type, doc_date, amount, status, accounting_type, contractor_id, contractors(name)')
         .order('doc_date', { ascending: false })
-        .limit(50)
+        .gte('doc_date', dateFrom)
+        .lte('doc_date', dateTo + 'T23:59:59')
+        .limit(100)
 
       if (typeFilter !== 'all') query = query.eq('doc_type', typeFilter)
       if (statusFilter !== 'all') query = query.eq('status', statusFilter)
@@ -59,7 +75,7 @@ export default function Documents() {
     setLoading(false)
   }
 
-  useEffect(() => { load() }, [typeFilter, statusFilter, accFilter])
+  useEffect(() => { load() }, [typeFilter, statusFilter, accFilter, dateFrom, dateTo])
 
   const openDoc = useCallback((doc) => {
     setSelectedDoc(doc)
@@ -75,7 +91,8 @@ export default function Documents() {
   const closeDoc = useCallback(() => {
     setSelectedDoc(null)
     if (tg?.BackButton) tg.BackButton.hide()
-  }, [])
+    load()
+  }, [dateFrom, dateTo, typeFilter, statusFilter, accFilter])
 
   if (selectedDoc) {
     return <DocDetail docId={selectedDoc.id} onBack={closeDoc} onNavigate={(id) => {
@@ -90,6 +107,14 @@ export default function Documents() {
   if (loading) return <Spinner />
   if (error) return <ErrorMsg msg={error} />
 
+  const inputStyle = {
+    padding: '8px 10px', borderRadius: 8,
+    border: `1px solid ${colors.border}`,
+    background: colors.secondaryBg, color: colors.text,
+    fontSize: 12, outline: 'none', fontFamily: 'inherit',
+    flex: 1, minWidth: 0,
+  }
+
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
@@ -97,18 +122,19 @@ export default function Documents() {
         <button
           onClick={() => setShowCreate(true)}
           style={{
-            padding: '6px 14px',
-            borderRadius: 8,
-            border: 'none',
-            background: colors.button,
-            color: colors.buttonText,
-            fontSize: 12,
-            cursor: 'pointer',
-            fontFamily: 'inherit',
+            padding: '6px 14px', borderRadius: 8, border: 'none',
+            background: colors.button, color: colors.buttonText,
+            fontSize: 12, cursor: 'pointer', fontFamily: 'inherit',
           }}
         >
           + Черновик
         </button>
+      </div>
+
+      {/* Date filters */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+        <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} style={inputStyle} />
+        <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} style={inputStyle} />
       </div>
 
       <FilterChips options={TYPE_OPTIONS} value={typeFilter} onChange={setTypeFilter} />
@@ -150,14 +176,13 @@ export default function Documents() {
 
 // ─── Create Draft ───
 function CreateDraft({ onBack, onCreated }) {
-  const [docType, setDocType] = useState('receipt')
+  const [docType, setDocType] = useState('invoice')
   const [accType, setAccType] = useState('official')
   const [contractorId, setContractorId] = useState('')
   const [contractors, setContractors] = useState([])
   const [items, setItems] = useState([{ product_id: '', qty: '', price: '', unit: '' }])
   const [products, setProducts] = useState([])
   const [saving, setSaving] = useState(false)
-  const [error, setError] = useState(null)
 
   useEffect(() => {
     supabase.from('contractors').select('id, name').order('name').then(({ data }) => setContractors(data || []))
@@ -192,33 +217,29 @@ function CreateDraft({ onBack, onCreated }) {
   const removeItem = (i) => setItems(items.filter((_, idx) => idx !== i))
 
   const save = async () => {
-    if (!contractorId) { setError('Выберите контрагента'); return }
+    if (!contractorId) { toast.warn('Выберите контрагента'); return }
     const validItems = items.filter(it => it.product_id && it.qty)
-    if (validItems.length === 0) { setError('Добавьте хотя бы одну позицию'); return }
+    if (validItems.length === 0) { toast.warn('Добавьте хотя бы одну позицию'); return }
 
     setSaving(true)
-    setError(null)
     try {
       const totalSum = validItems.reduce((s, it) => s + Number(it.qty || 0) * Number(it.price || 0), 0)
-      const PREFIX = { receipt: 'ДОК', invoice: 'СЧ', torg12: 'ТН' }
+      const PREFIX = { receipt: 'ДОК', invoice: 'СЧ', torg12: 'ТН', ttn: 'ТТН' }
       const num = (PREFIX[docType] || 'ДОК') + '-' + Date.now().toString().slice(-4)
 
       const contractor = contractors.find(c => String(c.id) === String(contractorId))
       const { data: doc, error: docErr } = await supabase
         .from('documents')
         .insert({
-          doc_type: docType,
-          num,
-          status: 'draft',
-          posted: false,
+          doc_type: docType, num,
+          status: 'draft', posted: false,
           accounting_type: accType,
           contractor_id: Number(contractorId),
           contractor_name: contractor?.name || '',
           amount: totalSum,
           doc_date: new Date().toISOString(),
         })
-        .select()
-        .single()
+        .select().single()
 
       if (docErr) throw docErr
 
@@ -231,9 +252,7 @@ function CreateDraft({ onBack, onCreated }) {
           product_id: Number(it.product_id),
           name: prod?.name || '',
           unit: prod?.unit || it.unit || '',
-          qty,
-          price,
-          amount: qty * price,
+          qty, price, amount: qty * price,
           sort_order: idx + 1,
         }
       })
@@ -242,17 +261,19 @@ function CreateDraft({ onBack, onCreated }) {
       if (itemsErr) throw itemsErr
 
       if (tg?.HapticFeedback) tg.HapticFeedback.notificationOccurred('success')
+      toast.success('Черновик создан')
       onCreated()
     } catch (e) {
-      setError(e.message)
+      toast.error(e.message)
     }
     setSaving(false)
   }
 
   const createTypeOptions = [
-    { value: 'receipt', label: 'Приходная' },
     { value: 'invoice', label: 'Счёт' },
     { value: 'torg12', label: 'ТОРГ-12' },
+    { value: 'ttn', label: 'ТТН' },
+    { value: 'receipt', label: 'Приходная' },
   ]
 
   const accOptions = [
@@ -261,17 +282,11 @@ function CreateDraft({ onBack, onCreated }) {
   ]
 
   const selectStyle = {
-    width: '100%',
-    padding: '10px 14px',
-    borderRadius: 10,
+    width: '100%', padding: '10px 14px', borderRadius: 10,
     border: `1px solid ${colors.border}`,
-    background: colors.secondaryBg,
-    color: colors.text,
-    fontSize: 13,
-    outline: 'none',
-    fontFamily: 'inherit',
-    marginBottom: 8,
-    appearance: 'auto',
+    background: colors.secondaryBg, color: colors.text,
+    fontSize: 13, outline: 'none', fontFamily: 'inherit',
+    marginBottom: 8, appearance: 'auto',
   }
 
   const inputStyle = { ...selectStyle, marginBottom: 0 }
@@ -306,40 +321,23 @@ function CreateDraft({ onBack, onCreated }) {
               {products.map(p => {
                 const stock = Number(p.qty || 0)
                 const label = `${p.name}${p.unit ? ` (${stock} ${p.unit})` : ` (${stock} шт)`}`
-                return (
-                  <option key={p.id} value={p.id} style={{ color: stock === 0 ? '#f44336' : 'inherit' }}>
-                    {label}
-                  </option>
-                )
+                return <option key={p.id} value={p.id}>{label}</option>
               })}
             </select>
 
-            {selProd && Number(selProd.qty) === 0 && (
-              <div style={{ fontSize: 11, color: '#f44336', marginBottom: 6 }}>
-                Нет в наличии
-              </div>
-            )}
-
             <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
-              <input
-                type="number"
-                placeholder="Кол-во"
-                value={it.qty}
+              <input type="number" placeholder="Кол-во" value={it.qty}
                 onChange={e => updateItem(i, 'qty', e.target.value)}
                 style={{ ...inputStyle, flex: 1 }}
               />
-              <input
-                type="number"
-                placeholder="Цена"
-                value={it.price}
+              <input type="number" placeholder="Цена" value={it.price}
                 onChange={e => updateItem(i, 'price', e.target.value)}
                 style={{ ...inputStyle, flex: 1 }}
               />
               {items.length > 1 && (
                 <button onClick={() => removeItem(i)} style={{
                   padding: '10px 12px', borderRadius: 8, border: 'none',
-                  background: '#f4433622', color: '#f44336', cursor: 'pointer', fontSize: 14,
-                  flexShrink: 0,
+                  background: '#f4433622', color: '#f44336', cursor: 'pointer', fontSize: 14, flexShrink: 0,
                 }}>×</button>
               )}
             </div>
@@ -347,7 +345,6 @@ function CreateDraft({ onBack, onCreated }) {
             {it.qty && it.price && (
               <div style={{ fontSize: 11, color: colors.hint, marginTop: 6, textAlign: 'right' }}>
                 Сумма: {fmt(Number(it.qty) * Number(it.price))} ₽
-                {it.unit && <span style={{ marginLeft: 8 }}>ед.: {it.unit}</span>}
               </div>
             )}
           </Card>
@@ -362,8 +359,6 @@ function CreateDraft({ onBack, onCreated }) {
         + Добавить позицию
       </button>
 
-      {error && <ErrorMsg msg={error} />}
-
       <button onClick={save} disabled={saving} style={{
         width: '100%', padding: '14px', borderRadius: 12,
         border: 'none', background: colors.button, color: colors.buttonText,
@@ -372,13 +367,6 @@ function CreateDraft({ onBack, onCreated }) {
       }}>
         {saving ? 'Сохранение...' : 'Создать черновик'}
       </button>
-
-      <div style={{
-        marginTop: 12, padding: 12, borderRadius: 10,
-        background: '#ff980022', fontSize: 12, color: '#ff9800', lineHeight: 1.5,
-      }}>
-        Проводка документов доступна только в SkySi Desktop
-      </div>
     </div>
   )
 }

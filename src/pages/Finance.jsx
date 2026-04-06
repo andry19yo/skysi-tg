@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { supabase } from '../supabase.js'
 import { fmt, fmtDateTime, ACCOUNTING_MAP, colors } from '../utils'
-import { Card, SectionTitle, Spinner, ErrorMsg, EmptyState, FilterChips } from '../components/Card.jsx'
+import { Card, SectionTitle, StatCard, Spinner, ErrorMsg, EmptyState, FilterChips } from '../components/Card.jsx'
 import { Badge } from '../components/Badge.jsx'
 
 export default function Finance() {
@@ -19,6 +19,7 @@ export default function Finance() {
       const { data: acc, error: e1 } = await supabase
         .from('financial_accounts')
         .select('*')
+        .eq('is_active', true)
         .order('name')
 
       if (e1) throw e1
@@ -28,12 +29,12 @@ export default function Finance() {
         .from('transactions')
         .select('*')
         .order('created_at', { ascending: false })
-        .limit(20)
+        .limit(30)
 
       if (e2) throw e2
       const txnWithNames = (txn || []).map(t => ({
         ...t,
-        account_name: (acc || []).find(a => a.id === t.financial_account_id)?.name,
+        account_name: (acc || []).find(a => a.id === t.financial_account_id)?.name || t.account_name,
       }))
       setTransactions(txnWithNames)
     } catch (e) {
@@ -47,6 +48,10 @@ export default function Finance() {
   if (loading) return <Spinner />
   if (error) return <ErrorMsg msg={error} />
 
+  const totalBalance = accounts
+    .filter(a => a.include_in_balance !== false)
+    .reduce((s, a) => s + Number(a.balance || 0), 0)
+
   const accountOptions = [
     { value: 'all', label: 'Все счета' },
     ...accounts.map(a => ({ value: String(a.id), label: a.name })),
@@ -54,22 +59,24 @@ export default function Finance() {
 
   const typeOptions = [
     { value: 'all', label: 'Все' },
-    { value: 'income', label: 'Приход' },
-    { value: 'expense', label: 'Расход' },
+    { value: 'in', label: 'Приход' },
+    { value: 'out', label: 'Расход' },
   ]
 
   let filteredTxn = transactions
   if (filterAccount !== 'all') {
     filteredTxn = filteredTxn.filter(t => String(t.financial_account_id) === filterAccount)
   }
-  if (filterType === 'income') {
-    filteredTxn = filteredTxn.filter(t => Number(t.amount) > 0)
-  } else if (filterType === 'expense') {
-    filteredTxn = filteredTxn.filter(t => Number(t.amount) < 0)
+  if (filterType === 'in') {
+    filteredTxn = filteredTxn.filter(t => t.tx_type === 'in')
+  } else if (filterType === 'out') {
+    filteredTxn = filteredTxn.filter(t => t.tx_type === 'out')
   }
 
   return (
     <div>
+      <StatCard label="Общий баланс" value={fmt(totalBalance) + ' ₽'} color={totalBalance >= 0 ? '#4caf50' : '#f44336'} />
+
       <SectionTitle>Счета</SectionTitle>
       {accounts.map(a => (
         <Card key={a.id}>
@@ -102,14 +109,14 @@ export default function Finance() {
       ) : (
         filteredTxn.map(t => {
           const amt = Number(t.amount || 0)
-          const isIncome = amt > 0
+          const isIncome = t.tx_type === 'in'
           return (
             <Card key={t.id}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 12 }}>{t.description || t.account_name || '—'}</div>
                   <div style={{ fontSize: 11, color: colors.hint, marginTop: 2 }}>
-                    {t.account_name} &middot; {fmtDateTime(t.created_at)}
+                    {t.account_name} &middot; {fmtDateTime(t.tx_date || t.created_at)}
                   </div>
                 </div>
                 <div style={{
@@ -119,7 +126,7 @@ export default function Finance() {
                   whiteSpace: 'nowrap',
                   marginLeft: 8,
                 }}>
-                  {isIncome ? '+' : ''}{fmt(amt)} ₽
+                  {isIncome ? '+' : '-'}{fmt(amt)} ₽
                 </div>
               </div>
             </Card>
