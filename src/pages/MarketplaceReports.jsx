@@ -88,10 +88,15 @@ function aggregateWB(rows) {
     a.cost += (Number(r.quantity) || 0) * (Number(r._cost) || 0)
     a.qty += Number(r.quantity) || 0
   }
+  // Distribute logistics + storage + penalties proportionally by article revenue
+  const totalArticleForPay = Object.values(byArt).reduce((s, a) => s + a.forPay, 0)
   const articles = Object.values(byArt).sort((a, b) => b.forPay - a.forPay).map(a => {
+    const share = totalArticleForPay ? a.forPay / totalArticleForPay : 0
+    const logist = Math.round((totalLogist + totalStorage + totalPenalty) * share)
+    const returnShare = Math.round(returnForPay * share)
     const tx = Math.round(a.forPay * TAX_RATE)
-    const prof = a.forPay - a.cost - tx
-    return { ...a, tax: tx, profit: prof, margin: a.forPay ? Math.round(prof / a.forPay * 100) : 0 }
+    const prof = a.forPay - returnShare - logist - a.cost - tx
+    return { ...a, logist, tax: tx, profit: prof, margin: a.forPay ? Math.round(prof / a.forPay * 100) : 0 }
   })
 
   return {
@@ -275,9 +280,11 @@ function WBTab({ dateFrom, dateTo }) {
                   {fmt(a.profit)} ₽
                 </span>
               </div>
-              <div style={{ display: 'flex', gap: 12, fontSize: 10, color: colors.hint }}>
+              <div style={{ display: 'flex', gap: 10, fontSize: 10, color: colors.hint, flexWrap: 'wrap' }}>
                 <span>{a.qty} шт</span>
-                <span>выр. {fmt(a.forPay)} ₽</span>
+                <span>выр. {fmt(a.forPay)}</span>
+                <span>себ. {fmt(a.cost)}</span>
+                <span>лог. {fmt(a.logist)}</span>
                 <span>маржа {a.margin}%</span>
               </div>
             </Card>
